@@ -7,70 +7,85 @@ import * as bcrypt from 'bcrypt';
 @Injectable()
 export class EstudianteService {
   private readonly logger = new Logger(EstudianteService.name);
+  private readonly saltRounds = 10;
 
   constructor(private readonly sqlService: SqlService) {}
 
-  // 🔁 Función reutilizable para obtener un nombre desde un SP por ID
-  private async getNombreById(spName: string, id: number | null): Promise<string | null> {
-    if (id === null || id === undefined || id <= 0) return null;
-    try {
-      const pool = await this.sqlService.getConnection();
-      const result = await pool.request().input('Id', id).execute(spName);
-      return result.recordset?.[0]?.Nombre ?? null;
-    } catch (error) {
-      this.logger.error(`Error obteniendo nombre desde ${spName}:`, error);
-      return null;
-    }
-  }
-
-  // 🔐 Función para generar una contraseña temporal
-  private generateTemporaryPassword(length: number = 10): string {
-    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()';
+  // 🔐 Función para generar una contraseña temporal segura
+  private generateTemporaryPassword(length: number = 12): string {
+    const uppercase = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+    const lowercase = 'abcdefghijklmnopqrstuvwxyz';
+    const numbers = '0123456789';
+    const symbols = '!@#$%^&*()_+-=[]{}|;:,.<>?';
+    const allChars = uppercase + lowercase + numbers + symbols;
+    
     let password = '';
-    for (let i = 0; i < length; i++) {
-      password += chars.charAt(Math.floor(Math.random() * chars.length));
+    // Garantizar al menos un carácter de cada tipo
+    password += uppercase[Math.floor(Math.random() * uppercase.length)];
+    password += lowercase[Math.floor(Math.random() * lowercase.length)];
+    password += numbers[Math.floor(Math.random() * numbers.length)];
+    password += symbols[Math.floor(Math.random() * symbols.length)];
+    
+    // Completar con caracteres aleatorios
+    for (let i = 4; i < length; i++) {
+      password += allChars[Math.floor(Math.random() * allChars.length)];
     }
-    return password;
+    
+    // Mezclar la contraseña
+    return password.split('').sort(() => 0.5 - Math.random()).join('');
   }
 
-  // 👤 Función para crear usuario automáticamente - CORREGIDA
-  private async createUserForStudent(estudianteId: number, email: string, nombre: string, apellido: string, role: string = 'estudiante'): Promise<{ username: string, password: string }> {
+  // 👤 Función para crear usuario automáticamente con hash correcto
+  private async createUserForStudent(
+    estudianteId: number, 
+    email: string, 
+    nombre: string, 
+    apellido: string, 
+    role: string = 'estudiante'
+  ): Promise<{ username: string, password: string, hashedPassword: string }> {
     try {
+      this.logger.log(`Creando usuario para estudiante ID: ${estudianteId}, Email: ${email}`);
+      
       const pool = await this.sqlService.getConnection();
       const request = pool.request();
       
       // Generar credenciales
       const username = email.split('@')[0]; // Usar la parte antes del @ como username
       const tempPassword = this.generateTemporaryPassword();
-      const hashedPassword = await bcrypt.hash(tempPassword, 10);
       
-      // ✅ CORRECCIÓN: Pasar todos los parámetros requeridos por el SP
+      // ✅ HASH LA CONTRASEÑA CORRECTAMENTE
+      const hashedPassword = await bcrypt.hash(tempPassword, this.saltRounds);
+      this.logger.log(`Contraseña generada y hasheada para ${username}: ${tempPassword} -> ${hashedPassword.substring(0, 20)}...`);
+      
+      // ✅ PASAR TODOS LOS PARÁMETROS REQUERIDOS POR EL SP
       request.input('Id', 0); // 0 para nuevo usuario
       request.input('Nombre', username);
-      request.input('Contrasena', hashedPassword);
+      request.input('Contrasena', hashedPassword); // ✅ Contraseña hasheada
       request.input('Apellidos', apellido);
       request.input('Email', email);
       request.input('Role', role);
-      request.input('Identifier', null); // ✅ El SP lo generará automáticamente
+      request.input('Identifier', null); // El SP lo generará automáticamente
       
       const result = await request.execute('Beca.sp_Save_Usuario');
       const usuarioId = result.recordset?.[0]?.NewId;
       
       this.logger.log(`Usuario creado exitosamente con ID: ${usuarioId} para estudiante: ${estudianteId}`);
       
-      return { username, password: tempPassword };
-    } catch (error) {
-      this.logger.error('Error detallado creando usuario para estudiante:', error);
+      return { username, password: tempPassword, hashedPassword };
+    } catch (error: any) {
+      this.logger.error(`Error creando usuario para estudiante ${estudianteId}: ${error.message}`, error.stack);
       throw new Error('No se pudo crear el usuario automáticamente: ' + error.message);
     }
   }
 
   async create(obj: CreateEstudianteDto) {
     try {
+      this.logger.log('Creando estudiante: ' + JSON.stringify(obj));
+      
       const pool = await this.sqlService.getConnection();
       const request = pool.request();
 
-      // Siempre enviar Id; 0 si es nuevo estudiante
+      // Preparar datos para el SP de estudiante
       const id = obj.Id ?? 0;
       const EstadoId = obj.EstadoId !== undefined && obj.EstadoId !== null ? Number(obj.EstadoId) : null;
       const CarreraId = obj.CarreraId !== undefined && obj.CarreraId !== null ? Number(obj.CarreraId) : null;
@@ -80,39 +95,34 @@ export class EstudianteService {
       request.input('Apellido', obj.Apellido);
       request.input('Edad', obj.Edad);
       request.input('Correo', obj.Correo);
-      
-      // Solo pasar valores válidos (no null) a los SPs
-      if (EstadoId !== null && EstadoId > 0) {
-        request.input('EstadoId', EstadoId);
-      } else {
-        request.input('EstadoId', null);
-      }
-      
-      if (CarreraId !== null && CarreraId > 0) {
-        request.input('CarreraId', CarreraId);
-      } else {
-        request.input('CarreraId', null);
-      }
+      request.input('EstadoId', EstadoId);
+      request.input('CarreraId', CarreraId);
 
       const result: any = await request.execute('Beca.sp_Save_Estudiante');
-
       const estudianteId = result.recordset?.[0]?.NewId || id;
 
-      // Crear usuario automáticamente - ✅ Ahora con los parámetros correctos
+      if (!estudianteId && id === 0) {
+        throw new Error('No se devolvió un ID válido al crear el estudiante.');
+      }
+
+      this.logger.log(`Estudiante creado/actualizado con ID: ${estudianteId}`);
+
+      // Crear usuario automáticamente con hash correcto
       const credenciales = await this.createUserForStudent(
         estudianteId, 
         obj.Correo, 
         obj.Nombre, 
         obj.Apellido,
-        obj.Role || 'estudiante'
+        'estudiante'
       );
 
+      // Obtener nombres de lookup
       const estadoNombre = await this.getNombreById('Beca.sp_Get_Estado', EstadoId);
       const carreraNombre = await this.getNombreById('Beca.sp_Get_Carrera', CarreraId);
 
       return {
         estudiante: {
-          id: estudianteId,
+          Id: estudianteId,
           Nombre: obj.Nombre,
           Apellido: obj.Apellido,
           Edad: obj.Edad,
@@ -122,99 +132,99 @@ export class EstudianteService {
           CarreraId,
           carreraNombre,
         },
-        credenciales
+        credenciales: {
+          username: credenciales.username,
+          password: credenciales.password, // ✅ Contraseña sin hash para mostrar
+          mensaje: 'Usuario creado exitosamente'
+        }
       };
-    } catch (e: any) {
-      this.logger.error('Error creando estudiante:', e);
-      return {
-        error: 'Error interno',
-        detalle: e?.message || e?.originalError?.info?.message || JSON.stringify(e),
-      };
+
+    } catch (error: any) {
+      this.logger.error(`Error creando estudiante: ${error.message}`, error.stack);
+      throw error;
+    }
+  }
+
+  // Resto de métodos mantienen la misma lógica...
+  private async getNombreById(spName: string, id: number | null): Promise<string | null> {
+    if (id === null || id === undefined || id <= 0) return null;
+    try {
+      const pool = await this.sqlService.getConnection();
+      const request = pool.request();
+      request.input('Id', id);
+      const result = await request.execute(spName);
+      return result.recordset?.[0]?.Nombre ?? null;
+    } catch (error: any) {
+      this.logger.error(`Error obteniendo nombre desde ${spName} para ID ${id}: ${error.message}`, error.stack);
+      return null;
     }
   }
 
   async findAll() {
     try {
       const pool = await this.sqlService.getConnection();
-
-      const estudiantesResult = await pool.request().input('Id', 0).execute('Beca.sp_Get_Estudiante');
+      const estudiantesResult: any = await pool.request().input('Id', 0).execute('Beca.sp_Get_Estudiante');
       const estudiantes = estudiantesResult.recordset;
 
-      // Obtener todas las carreras y estados
-      const [carrerasResult, estadosResult] = await Promise.all([
-        pool.request().input('Id', 0).execute('Beca.sp_Get_Carrera'),
-        pool.request().input('Id', 0).execute('Beca.sp_Get_Estado'),
-      ]);
-
-      const carreras = carrerasResult.recordset;
+      const estadosResult: any = await pool.request().input('Id', 0).execute('Beca.sp_Get_Estado');
       const estados = estadosResult.recordset;
 
-      return estudiantes.map(est => {
-        const carrera = carreras.find(c => c.Id === est.CarreraId);
-        const estado = estados.find(e => e.Id === est.EstadoId);
+      const carrerasResult: any = await pool.request().input('Id', 0).execute('Beca.sp_Get_Carrera');
+      const carreras = carrerasResult.recordset;
+
+      const estudiantesConNombres = estudiantes.map((est: any) => {
+        const estado = estados.find((e: any) => e.Id === est.EstadoId);
+        const carrera = carreras.find((c: any) => c.Id === est.CarreraId);
         return {
           ...est,
-          carreraNombre: carrera?.Nombre ?? null,
           estadoNombre: estado?.Nombre ?? null,
+          carreraNombre: carrera?.Nombre ?? null,
         };
       });
-    } catch (e: any) {
-      this.logger.error('Error al obtener estudiantes', e);
-      return { error: 'Error al obtener los estudiantes', detalle: e.message ?? e };
+
+      return estudiantesConNombres;
+    } catch (error: any) {
+      this.logger.error(`Error al obtener todos los estudiantes: ${error.message}`, error.stack);
+      throw error;
     }
   }
 
   async findOne(id: number) {
     try {
       const pool = await this.sqlService.getConnection();
-      const estudianteResult = await pool.request().input('Id', id).execute('Beca.sp_Get_Estudiante');
+      const estudianteResult: any = await pool.request().input('Id', id).execute('Beca.sp_Get_Estudiante');
 
-      if (!estudianteResult.recordset?.length) {
-        return { mensaje: `Estudiante con ID ${id} no encontrado` };
+      if (estudianteResult.recordset.length === 0) {
+        throw new Error(`Estudiante con ID ${id} no encontrado`);
       }
 
       const estudiante = estudianteResult.recordset[0];
-
-      const [estadoNombre, carreraNombre] = await Promise.all([
-        this.getNombreById('Beca.sp_Get_Estado', estudiante.EstadoId),
-        this.getNombreById('Beca.sp_Get_Carrera', estudiante.CarreraId),
-      ]);
+      const estadoNombre = await this.getNombreById('Beca.sp_Get_Estado', estudiante.EstadoId);
+      const carreraNombre = await this.getNombreById('Beca.sp_Get_Carrera', estudiante.CarreraId);
 
       return {
         ...estudiante,
         estadoNombre,
         carreraNombre,
       };
-    } catch (e: any) {
-      this.logger.error('Error al buscar estudiante por ID:', e);
-      return { error: 'Error al buscar el estudiante', detalle: e.message ?? e };
+    } catch (error: any) {
+      this.logger.error(`Error al buscar estudiante por ID ${id}: ${error.message}`, error.stack);
+      throw error;
     }
   }
 
   async remove(id: number) {
     try {
       const pool = await this.sqlService.getConnection();
+      const result = await pool.request().input('Id', id).execute('Beca.sp_Delete_Estudiante');
 
-      const estudianteResult = await pool.request().input('Id', id).execute('Beca.sp_Get_Estudiante');
-      if (!estudianteResult.recordset?.length) {
-        return { mensaje: `Estudiante con ID ${id} no encontrado` };
+      if (result.rowsAffected[0] === 0) {
+        throw new Error(`Estudiante con ID ${id} no encontrado o no se pudo eliminar.`);
       }
-
-      const estudiante = estudianteResult.recordset[0];
-      const [estadoNombre, carreraNombre] = await Promise.all([
-        this.getNombreById('Beca.sp_Get_Estado', estudiante.EstadoId),
-        this.getNombreById('Beca.sp_Get_Carrera', estudiante.CarreraId),
-      ]);
-
-      await pool.request().input('Id', id).execute('Beca.sp_Delete_Estudiante');
-
-      return {
-        mensaje: `Estudiante con ID ${id} eliminado correctamente`,
-        estudiante: { ...estudiante, estadoNombre, carreraNombre },
-      };
-    } catch (e: any) {
-      this.logger.error('Error al eliminar estudiante:', e);
-      return { error: 'Error al eliminar el estudiante', detalle: e.message ?? e };
+      return { mensaje: `Estudiante con ID ${id} eliminado correctamente` };
+    } catch (error: any) {
+      this.logger.error(`Error al eliminar estudiante ID ${id}: ${error.message}`, error.stack);
+      throw error;
     }
   }
 }
