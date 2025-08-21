@@ -1,4 +1,7 @@
-import { Controller, Post, Body, Get, Param, Delete, Put, Logger, HttpException, HttpStatus, ValidationPipe } from '@nestjs/common';
+import { 
+  Controller, Post, Body, Get, Param, Delete, Put, 
+  Logger, HttpException, HttpStatus, ValidationPipe 
+} from '@nestjs/common';
 import { TipoBecaService } from './TipoBeca.service';
 import { CreateTipoBecaDto } from './dto/create-TipoBeca.dto';
 
@@ -8,14 +11,31 @@ export class TipoBecaController {
 
   constructor(private readonly tipoBecaService: TipoBecaService) {}
 
+  // --- Helper para validar ID ---
+  private validarId(id: string): number {
+    const numId = Number(id);
+    if (isNaN(numId) || numId <= 0) {
+      throw new HttpException(`ID inválido: ${id}`, HttpStatus.BAD_REQUEST);
+    }
+    return numId;
+  }
+
   @Post('/add')
-  async create(@Body(new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true })) dto: CreateTipoBecaDto) {
+  async create(
+    @Body(new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true })) 
+    dto: CreateTipoBecaDto
+  ) {
     return this.tipoBecaService.create(dto);
   }
 
   @Put(':id')
-  async update(@Param('id') id: string, @Body(new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true })) dto: CreateTipoBecaDto) {
-    return this.tipoBecaService.update(Number(id), dto);
+  async update(
+    @Param('id') id: string, 
+    @Body(new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true })) 
+    dto: CreateTipoBecaDto
+  ) {
+    const numId = this.validarId(id);
+    return this.tipoBecaService.update(numId, dto);
   }
 
   @Get()
@@ -25,21 +45,25 @@ export class TipoBecaController {
 
   @Get(':id')
   async findOne(@Param('id') id: string) {
-    return this.tipoBecaService.findOne(Number(id));
+    const numId = this.validarId(id);
+    return this.tipoBecaService.findOne(numId);
   }
 
   @Delete(':id')
   async remove(@Param('id') id: string) {
-    return this.tipoBecaService.remove(Number(id));
+    const numId = this.validarId(id);
+    return this.tipoBecaService.remove(numId);
   }
 
   @Put(':id/estado')
   async updateEstado(@Param('id') id: string, @Body('EstadoId') estadoId: number) {
-    const idNum = Number(id);
-    if (isNaN(idNum) || idNum <= 0) throw new HttpException('ID inválido', HttpStatus.BAD_REQUEST);
-    if (!estadoId || estadoId <= 0) throw new HttpException('EstadoId inválido', HttpStatus.BAD_REQUEST);
+    const numId = this.validarId(id);
 
-    return this.tipoBecaService.updateEstado(idNum, estadoId);
+    if (!estadoId || estadoId <= 0) {
+      throw new HttpException('EstadoId inválido', HttpStatus.BAD_REQUEST);
+    }
+
+    return this.tipoBecaService.updateEstado(numId, estadoId);
   }
 
   @Get('resumen')
