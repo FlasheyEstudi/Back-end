@@ -1,179 +1,226 @@
-import { Injectable } from '@nestjs/common';
+// src/ms/DetallePago/DetallePago.service.ts
+
+import { Injectable, Logger, HttpException, HttpStatus, NotFoundException } from '@nestjs/common';
 import { SqlService } from '../../ms/cnxjs/sql.service';
 import { CreateDetallePagoDto } from './dto/create-DetallePago.dto';
 
+export interface DetallePagoResponse {
+  Id: number;
+  SolicitudBecaId: number;
+  TipoPagoId: number;
+  Monto: number;
+  FechaPago: Date;
+  Referencia?: string | null;
+  EstadoId: number;
+  SolicitudBecaReferencia?: string | null;
+  TipoPagoNombre?: string | null;
+  Estadonombre?: string | null;
+}
+
+export interface SolicitudBecaLookup {
+  Id: number;
+  Referencia: string;
+}
+
+export interface TipoPagoLookup {
+  Id: number;
+  Nombre: string;
+}
+
+export interface EstadoLookup {
+  Id: number;
+  Nombre: string;
+}
+
 @Injectable()
 export class DetallePagoService {
+  private readonly logger = new Logger(DetallePagoService.name);
+
   constructor(private readonly sqlService: SqlService) {}
 
-  async create(obj: CreateDetallePagoDto) {
+  async create(dto: CreateDetallePagoDto): Promise<DetallePagoResponse> {
     try {
-      console.log('📥 DTO recibido en create():', obj);
-
       const pool = await this.sqlService.getConnection();
       const request = pool.request();
 
-      const id = obj.Id ?? 0;
-      const EstadoId = Number(obj.EstadoId);
-      const SolicitudBecaId = Number(obj.SolicitudBecaId);
-      const TipoPagoId = Number(obj.TipoPagoId);
+      const isUpdate = dto.Id && dto.Id > 0;
+      const detallePagoIdForSp = isUpdate ? dto.Id : 0;
 
-      request.input('Id', id);
-      request.input('SolicitudBecaId', SolicitudBecaId);
-      request.input('TipoPagoId', TipoPagoId);
-      request.input('Monto', obj.Monto);
-      request.input('FechaPago', obj.FechaPago);
-      request.input('Referencia', obj.Referencia);
-      request.input('EstadoId', EstadoId);
+      request.input('Id', detallePagoIdForSp);
+      request.input('SolicitudBecaId', dto.SolicitudBecaId);
+      request.input('TipoPagoId', dto.TipoPagoId);
+      request.input('Monto', dto.Monto);
+      request.input('FechaPago', new Date(dto.FechaPago));
+      request.input('Referencia', dto.Referencia ?? null);
+      request.input('EstadoId', dto.EstadoId);
 
       const result: any = await request.execute('Beca.sp_Save_DetallePago');
 
-      const DetallePagoId =
-        result.recordset?.[0]?.NewId ||
-        result.recordset?.[0]?.UpdatedId ||
-        id;
+      const newId = result.recordset?.[0]?.NewId || result.recordset?.[0]?.UpdatedId || detallePagoIdForSp;
 
-      const estadoResult = await pool
-        .request()
-        .input('Id', EstadoId)
-        .execute('Beca.sp_Get_Estado');
-      const estadoNombre = estadoResult.recordset?.[0]?.Nombre ?? null;
+      if (!newId && !isUpdate) throw new Error('No se devolvió un NewId válido.');
 
-      const tipoPagoIdResult = await pool
-        .request()
-        .input('Id', TipoPagoId)
-        .execute('Beca.sp_Get_TipoPago');
-      const tipopagoNombre = tipoPagoIdResult.recordset?.[0]?.Nombre ?? null;
-
-      return {
-        id: DetallePagoId,
-        SolicitudBecaId,
-        TipoPagoId,
-        TipoPagoNombre: tipopagoNombre,
-        Monto: obj.Monto,
-        FechaPago: obj.FechaPago,
-        Referencia: obj.Referencia,
-        EstadoId,
-        Estadonombre: estadoNombre,
-      };
-    } catch (e) {
-      console.error('Error al ejecutar el SP:', JSON.stringify(e, null, 2));
-      return { error: 'Error interno', detalle: e.message ?? e };
+      return await this.findOne(newId);
+    } catch (error: any) {
+      this.logger.error(`Error al guardar Detalle de Pago: ${error.message}`, error.stack);
+      throw new HttpException({
+        status: HttpStatus.INTERNAL_SERVER_ERROR,
+        detalle: 'Error interno al guardar Detalle de Pago.',
+        technical: error.message
+      }, HttpStatus.INTERNAL_SERVER_ERROR);
     }
   }
 
-  async findAll() {
+  async update(id: number, dto: CreateDetallePagoDto): Promise<DetallePagoResponse> {
+    dto.Id = id;
+    return this.create(dto);
+  }
+
+  async findAll(): Promise<DetallePagoResponse[]> {
     try {
       const pool = await this.sqlService.getConnection();
+      const result: any = await pool.request().input('Id', 0).execute('Beca.sp_Get_DetallePago');
+      const detallesDePago = result.recordset;
 
-      const detallePagoResult: any = await pool
-        .request()
-        .input('Id', 0)
-        .execute('Beca.sp_Get_DetallePago');
-      
-      // 🛑 CAMBIO CLAVE: Se filtra el array para eliminar registros con IDs nulos o cero
-      const detallePagos = detallePagoResult.recordset.filter(
-        (detalle: any) => detalle.Id && detalle.Id > 0
-      );
+      const [solicitudes, tiposPago, estados] = await Promise.all([
+        this.getAllSolicitudBecasLookup(),
+        this.getAllTipoPagosLookup(),
+        this.getAllEstadosLookup(),
+      ]);
 
-      const estadosResult: any = await pool
-        .request()
-        .input('Id', 0)
-        .execute('Beca.sp_Get_Estado');
-      const estados = estadosResult.recordset;
-
-      const tipoPagoResult: any = await pool
-        .request()
-        .input('Id', 0)
-        .execute('Beca.sp_Get_TipoPago');
-      const tipoPagos = tipoPagoResult.recordset;
-
-      const detallePagosConNombres = detallePagos.map((req: any) => {
-        const estado = estados.find((e: any) => e.Id === Number(req.EstadoId));
-        const tipoPago = tipoPagos.find((tp: any) => tp.Id === Number(req.TipoPagoId));
-
-        return {
-          ...req,
-          Estadonombre: estado?.Nombre ?? null,
-          TipoPagoNombre: tipoPago?.Nombre ?? null,
-        };
-      });
-
-      return detallePagosConNombres;
-    } catch (e) {
-      console.error('Error al obtener los DetallePagos', JSON.stringify(e, null, 2));
-      return { error: 'Error al obtener los DetallePagos', detalle: e.message ?? e };
+      return detallesDePago.map((dp: any) => ({
+        ...dp,
+        FechaPago: new Date(dp.FechaPago),
+        SolicitudBecaReferencia: solicitudes.find(s => s.Id === dp.SolicitudBecaId)?.Referencia ?? null,
+        TipoPagoNombre: tiposPago.find(tp => tp.Id === dp.TipoPagoId)?.Nombre ?? null,
+        Estadonombre: estados.find(e => e.Id === dp.EstadoId)?.Nombre ?? null,
+      }));
+    } catch (error: any) {
+      this.logger.error(`Error al obtener todos los Detalles de Pago: ${error.message}`, error.stack);
+      throw new HttpException({
+        status: HttpStatus.INTERNAL_SERVER_ERROR,
+        detalle: 'Error al obtener los Detalles de Pago.',
+        technical: error.message,
+      }, HttpStatus.INTERNAL_SERVER_ERROR);
     }
   }
 
-  async findOne(id: number) {
+  async findOne(id: number): Promise<DetallePagoResponse> {
     try {
       const pool = await this.sqlService.getConnection();
+      const result: any = await pool.request().input('Id', id).execute('Beca.sp_Get_DetallePago');
 
-      const detallePagoResult: any = await pool
-        .request()
-        .input('Id', id)
-        .execute('Beca.sp_Get_DetallePago');
+      if (!result.recordset.length) throw new NotFoundException(`Detalle de Pago con ID ${id} no encontrado.`);
 
-      if (detallePagoResult.recordset.length === 0) {
-        return { mensaje: `DetallePago con ID ${id} no encontrado` };
-      }
+      const detallePago = result.recordset[0];
 
-      const detallePago = detallePagoResult.recordset[0];
+      const [solicitud, tipoPago, estado] = await Promise.all([
+        this.getSolicitudBecaNameById(detallePago.SolicitudBecaId),
+        this.getTipoPagoNameById(detallePago.TipoPagoId),
+        this.getEstadoNameById(detallePago.EstadoId),
+      ]);
 
-      const estadoResult = await pool
-        .request()
-        .input('Id', Number(detallePago.EstadoId))
-        .execute('Beca.sp_Get_Estado');
-      const estadoNombre = estadoResult.recordset?.[0]?.Nombre ?? null;
-
-      const tipoPagoResult = await pool
-        .request()
-        .input('Id', Number(detallePago.TipoPagoId))
-        .execute('Beca.sp_Get_TipoPago');
-      const tipoPagoNombre = tipoPagoResult.recordset?.[0]?.Nombre ?? null;
-
-      return {
-        ...detallePago,
-        Estadonombre: estadoNombre,
-        TipoPagoNombre: tipoPagoNombre,
+      return { 
+        ...detallePago, 
+        FechaPago: new Date(detallePago.FechaPago), 
+        SolicitudBecaReferencia: solicitud, 
+        TipoPagoNombre: tipoPago, 
+        Estadonombre: estado 
       };
-    } catch (e) {
-      console.error('Error al buscar el DetallePago por ID:', JSON.stringify(e, null, 2));
-      return { error: 'Error al buscar el DetallePago', detalle: e.message ?? e };
+    } catch (error: any) {
+      this.logger.error(`Error al buscar Detalle de Pago por ID ${id}: ${error.message}`, error.stack);
+      if (error instanceof HttpException) throw error;
+      throw new HttpException({
+        status: HttpStatus.INTERNAL_SERVER_ERROR,
+        detalle: `Error al buscar el Detalle de Pago con ID ${id}.`,
+        technical: error.message,
+      }, HttpStatus.INTERNAL_SERVER_ERROR);
     }
   }
 
-  async remove(id: number) {
+  async remove(id: number): Promise<{ mensaje: string }> {
     try {
       const pool = await this.sqlService.getConnection();
+      const result = await pool.request().input('Id', id).execute('Beca.sp_Delete_DetallePago');
 
-      const detallePagoResult: any = await pool
-        .request()
-        .input('Id', id)
-        .execute('Beca.sp_Get_DetallePago');
+      if (result.rowsAffected[0] === 0) throw new NotFoundException(`Detalle de Pago con ID ${id} no encontrado.`);
 
-      if (detallePagoResult.recordset.length === 0) {
-        return { mensaje: `DetallePago con ID ${id} no encontrado` };
-      }
+      return { mensaje: `Detalle de Pago con ID ${id} eliminado correctamente` };
+    } catch (error: any) {
+      this.logger.error(`Error al eliminar Detalle de Pago ID ${id}: ${error.message}`, error.stack);
+      if (error instanceof HttpException) throw error;
+      throw new HttpException({
+        status: HttpStatus.INTERNAL_SERVER_ERROR,
+        detalle: 'Error al eliminar el Detalle de Pago.',
+        technical: error.message,
+      }, HttpStatus.INTERNAL_SERVER_ERROR);
+    }
+  }
 
-      const detallePago = detallePagoResult.recordset[0];
+  private async getSolicitudBecaNameById(id: number | null): Promise<string | null> {
+    if (!id) return null;
+    const solicitudes = await this.getAllSolicitudBecasLookup();
+    return solicitudes.find(s => s.Id === id)?.Referencia ?? null;
+  }
 
-      await pool
-        .request()
-        .input('Id', id)
-        .execute('Beca.sp_Delete_DetallePago');
+  private async getTipoPagoNameById(id: number | null): Promise<string | null> {
+    if (!id) return null;
+    const tipos = await this.getAllTipoPagosLookup();
+    return tipos.find(t => t.Id === id)?.Nombre ?? null;
+  }
+
+  private async getEstadoNameById(id: number | null): Promise<string | null> {
+    if (!id) return null;
+    const estados = await this.getAllEstadosLookup();
+    return estados.find(e => e.Id === id)?.Nombre ?? null;
+  }
+
+  async getAllSolicitudBecasLookup(): Promise<SolicitudBecaLookup[]> {
+    const pool = await this.sqlService.getConnection();
+    const result: any = await pool.request().input('Id', 0).execute('Beca.sp_Get_SolicitudBeca');
+    return result.recordset.map((s: any) => ({ Id: s.Id, Referencia: s.Referencia || `Solicitud #${s.Id}` }));
+  }
+
+  async getAllTipoPagosLookup(): Promise<TipoPagoLookup[]> {
+    const pool = await this.sqlService.getConnection();
+    const result: any = await pool.request().input('Id', 0).execute('Beca.sp_Get_TipoPago');
+    return result.recordset.map((tp: any) => ({ Id: tp.Id, Nombre: tp.Nombre }));
+  }
+
+  async getAllEstadosLookup(): Promise<EstadoLookup[]> {
+    const pool = await this.sqlService.getConnection();
+    const result: any = await pool.request().input('Id', 0).execute('Beca.sp_Get_Estado');
+    return result.recordset.map((e: any) => ({ Id: e.Id, Nombre: e.Nombre }));
+  }
+
+  // ✅ NUEVO MÉTODO AGREGADO
+  async getAllData(): Promise<{
+    detalles: DetallePagoResponse[];
+    solicitudes: SolicitudBecaLookup[];
+    tiposPago: TipoPagoLookup[];
+    estados: EstadoLookup[];
+  }> {
+    try {
+      const [detalles, solicitudes, tiposPago, estados] = await Promise.all([
+        this.findAll(),
+        this.getAllSolicitudBecasLookup(),
+        this.getAllTipoPagosLookup(),
+        this.getAllEstadosLookup(),
+      ]);
 
       return {
-        mensaje: `DetallePago con ID ${id} eliminado correctamente`,
-        DetallePago: detallePago,
+        detalles,
+        solicitudes,
+        tiposPago,
+        estados,
       };
-    } catch (e) {
-      console.error('Error al eliminar el DetallePago:', JSON.stringify(e, null, 2));
-      return {
-        error: 'Error al eliminar el DetallePago',
-        detalle: e.message ?? e,
-      };
+    } catch (error: any) {
+      this.logger.error(`Error al obtener todos los datos: ${error.message}`, error.stack);
+      throw new HttpException({
+        status: HttpStatus.INTERNAL_SERVER_ERROR,
+        detalle: 'Error al obtener todos los datos para gestión de Detalles de Pago.',
+        technical: error.message,
+      }, HttpStatus.INTERNAL_SERVER_ERROR);
     }
   }
 }

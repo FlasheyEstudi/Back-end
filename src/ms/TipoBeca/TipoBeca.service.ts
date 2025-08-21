@@ -1,158 +1,175 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger, HttpException, HttpStatus } from '@nestjs/common';
 import { SqlService } from '../../ms/cnxjs/sql.service';
 import { CreateTipoBecaDto } from './dto/create-TipoBeca.dto';
 
 @Injectable()
 export class TipoBecaService {
+  private readonly logger = new Logger(TipoBecaService.name);
+
   constructor(private readonly sqlService: SqlService) {}
 
- async create(obj: CreateTipoBecaDto) {
-  try {
-    console.log('📥 DTO recibido en create():', obj);
-
-    const pool = await this.sqlService.getConnection();
-    const request = pool.request();
-
-    const id = obj.Id ?? 0;
-    const EstadoId = Number(obj.EstadoId);
-
-    request.input('Id', id);
-    request.input('Nombre', obj.Nombre);
-    request.input('Descripcion', obj.Descripcion);
-    request.input('Monto', obj.Monto);
-    request.input('EstadoId', EstadoId);
-
-    const result: any = await request.execute('Beca.sp_Save_TipoBeca');
-
-    const TipoBecaId =
-      result.recordset?.[0]?.NewId ||
-      result.recordset?.[0]?.UpdatedId ||
-      id;
-
-    const estadoResult = await pool
-      .request()
-      .input('Id', EstadoId)
-      .execute('Beca.sp_Get_Estado');
-    const estadoNombre = estadoResult.recordset?.[0]?.Nombre ?? null;
-
-    return {
-      id: TipoBecaId,
-      Nombre:obj.Nombre,
-      Descripcion: obj.Descripcion,
-      Monto:obj.Monto,
-      EstadoId,
-      Estadonombre: estadoNombre,
-    };
-  } catch (e) {
-    console.error('Error al ejecutar el SP:', JSON.stringify(e, null, 2));
-    return { error: 'Error interno', detalle: e.message ?? e };
+  // 🔁 Función reutilizable para obtener un nombre desde un SP por ID (ej. para Estado)
+  private async getNombreById(spName: string, id: number | null): Promise<string | null> {
+    if (id === null || id === undefined || id <= 0) return null;
+    try {
+      const pool = await this.sqlService.getConnection();
+      const request = pool.request();
+      request.input('Id', id);
+      const result = await request.execute(spName);
+      return result.recordset?.[0]?.Nombre ?? null;
+    } catch (error: any) {
+      this.logger.error(`Error obteniendo nombre desde ${spName} para ID ${id}: ${error.message}`, error.stack);
+      return null;
+    }
   }
-}
+
+  // Este método maneja tanto la creación (INSERT) como la actualización (UPDATE)
+  async create(dto: CreateTipoBecaDto) {
+    try {
+      const pool = await this.sqlService.getConnection();
+      const request = pool.request();
+
+      const isUpdate = dto.Id && dto.Id > 0;
+      const tipoBecaIdForSp = isUpdate ? dto.Id : 0; // Si es update, usa el ID; si es insert, usa 0
+
+      request.input('Id', tipoBecaIdForSp);
+      request.input('Nombre', dto.Nombre);
+      request.input('Descripcion', dto.Descripcion || null); // Descripción puede ser opcional
+      request.input('Monto', dto.Monto);
+      request.input('EstadoId', dto.EstadoId);
+      
+      // Manejar fechas
+      request.input('FechaRegistro', dto.FechaRegistro || null);
+      // Para actualización, actualiza FechaModificacion; para creación, usa FechaRegistro o deja que el SP ponga GETDATE()
+      request.input('FechaModificacion', dto.FechaModificacion || null);
+
+      const result: any = await request.execute('Beca.sp_Save_TipoBeca'); // Asumiendo que este SP maneja INSERT/UPDATE
+
+      const newId = result.recordset?.[0]?.NewId || result.recordset?.[0]?.UpdatedId || tipoBecaIdForSp;
+
+      if (!newId && !isUpdate) {
+        throw new Error('El procedimiento almacenado no devolvió un NewId válido al crear el tipo de beca.');
+      }
+
+      // Obtener nombre de estado para la respuesta
+      const estadoNombre = await this.getNombreById('Beca.sp_Get_Estado', dto.EstadoId);
+
+      const responseTipoBeca = {
+        Id: newId,
+        Nombre: dto.Nombre,
+        Descripcion: dto.Descripcion || null,
+        Monto: dto.Monto,
+        FechaRegistro: dto.FechaRegistro || null,
+        FechaModificacion: dto.FechaModificacion || null,
+        EstadoId: dto.EstadoId,
+        Estadonombre: estadoNombre,
+      };
+
+      this.logger.log(`TipoBeca guardado/actualizado ID ${newId}: ${dto.Nombre}`);
+      return responseTipoBeca;
+
+    } catch (error: any) {
+      this.logger.error(`Error al guardar TipoBeca: ${error.message}`, error.stack);
+      if (error instanceof HttpException) throw error;
+      throw new HttpException(
+        {
+          status: HttpStatus.INTERNAL_SERVER_ERROR,
+          detalle: 'Error interno al guardar Tipo de Beca. Verifique los datos o ID de Estado.',
+          technical: error.message,
+          sqlError: error.originalError?.info?.message || null
+        },
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+  }
+
+  // Método explícito para actualización (llamado por el controlador PUT)
+  async update(id: number, dto: CreateTipoBecaDto) {
+      dto.Id = id; // Asegura que el ID del parámetro se use para la actualización
+      return this.create(dto); // Reutiliza el método 'create' que ya tiene la lógica de UPDATE
+  }
 
   async findAll() {
     try {
       const pool = await this.sqlService.getConnection();
+      const tipoBecaResult: any = await pool.request().input('Id', 0).execute('Beca.sp_Get_TipoBeca');
+      const tiposBeca = tipoBecaResult.recordset;
 
-      const TipoBecaResult: any = await pool
-        .request()
-        .input('Id', 0)
-        .execute('Beca.sp_Get_TipoBeca');
-      const TipoBecas = TipoBecaResult.recordset;
+      // Obtener todos los estados una vez
+      const estadosAll = await pool.request().input('Id', 0).execute('Beca.sp_Get_Estado').then(res => res.recordset);
 
-      const estadosResult: any = await pool
-        .request()
-        .input('Id', 0)
-        .execute('Beca.sp_Get_Estado');
-      const estados = estadosResult.recordset;
-
-      const TipoBecasConNombres = TipoBecas.map(req => {
-        const estadoId = Number(req.EstadoId);
-
-        const estado = estados.find(e => e.Id === estadoId);
-
+      const tiposBecaConNombres = tiposBeca.map(tb => {
+        const estado = estadosAll.find(s => s.Id === tb.EstadoId);
         return {
-          ...req,
+          ...tb,
           Estadonombre: estado?.Nombre ?? null,
         };
       });
-
-      return TipoBecasConNombres;
-    } catch (e) {
-      console.error('Error al obtener los TipoBecas', JSON.stringify(e, null, 2));
-      return { error: 'Error al obtener los TipoBecas', detalle: e.message ?? e };
+      return tiposBecaConNombres;
+    } catch (error: any) {
+      this.logger.error(`Error al obtener todos los TipoBecas: ${error.message}`, error.stack);
+      throw new HttpException(
+        {
+          status: HttpStatus.INTERNAL_SERVER_ERROR,
+          detalle: 'Error al obtener los Tipos de Beca',
+          technical: error.message,
+        },
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
     }
   }
 
   async findOne(id: number) {
     try {
       const pool = await this.sqlService.getConnection();
+      const tipoBecaResult: any = await pool.request().input('Id', id).execute('Beca.sp_Get_TipoBeca');
 
-      const TipoBecaResult: any = await pool
-        .request()
-        .input('Id', id)
-        .execute('Beca.sp_Get_TipoBeca');
-
-      if (TipoBecaResult.recordset.length === 0) {
-        return { mensaje: `TipoBeca con ID ${id} no encontrado` };
+      if (tipoBecaResult.recordset.length === 0) {
+        throw new HttpException(`TipoBeca con ID ${id} no encontrado`, HttpStatus.NOT_FOUND);
       }
 
-      const TipoBeca = TipoBecaResult.recordset[0];
+      const tipoBeca = tipoBecaResult.recordset[0];
 
-      const estadoResult = await pool
-        .request()
-        .input('Id', Number(TipoBeca.EstadoId))
-        .execute('Beca.sp_Get_Estado');
-      const estadoNombre = estadoResult.recordset?.[0]?.Nombre ?? null;
+      const estadoNombre = await this.getNombreById('Beca.sp_Get_Estado', tipoBeca.EstadoId);
 
       return {
-        ...TipoBeca,
+        ...tipoBeca,
         Estadonombre: estadoNombre,
       };
-    } catch (e) {
-      console.error('Error al buscar el TipoBeca por ID:', JSON.stringify(e, null, 2));
-      return { error: 'Error al buscar el TipoBeca', detalle: e.message ?? e };
+    } catch (error: any) {
+      this.logger.error(`Error al buscar TipoBeca por ID ${id}: ${error.message}`, error.stack);
+      if (error instanceof HttpException) throw error;
+      throw new HttpException(
+        {
+          status: HttpStatus.INTERNAL_SERVER_ERROR,
+          detalle: `Error al buscar el Tipo de Beca con ID ${id}`,
+          technical: error.message,
+        },
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
     }
   }
 
   async remove(id: number) {
     try {
       const pool = await this.sqlService.getConnection();
+      const result = await pool.request().input('Id', id).execute('Beca.sp_Delete_TipoBeca');
 
-      const TipoBecaResult: any = await pool
-        .request()
-        .input('Id', id)
-        .execute('Beca.sp_Get_TipoBeca');
-
-      if (TipoBecaResult.recordset.length === 0) {
-        return { mensaje: `TipoBeca con ID ${id} no encontrado` };
+      if (result.rowsAffected[0] === 0) {
+        throw new HttpException(`TipoBeca con ID ${id} no encontrado o no se pudo eliminar.`, HttpStatus.NOT_FOUND);
       }
-
-      const TipoBeca = TipoBecaResult.recordset[0];
-
-      const estadoResult = await pool
-        .request()
-        .input('Id', Number(TipoBeca.EstadoId))
-        .execute('Beca.sp_Get_Estado');
-      const estadoNombre = estadoResult.recordset?.[0]?.Nombre ?? null;
-
-      await pool
-        .request()
-        .input('Id', id)
-        .execute('Beca.sp_Delete_TipoBeca');
-
-      return {
-        mensaje: `TipoBeca con ID ${id} eliminado correctamente`,
-        TipoBeca: {
-          ...TipoBeca,
-          Estadonombre: estadoNombre,
+      return { mensaje: `TipoBeca con ID ${id} eliminado correctamente` };
+    } catch (error: any) {
+      this.logger.error(`Error al eliminar TipoBeca ID ${id}: ${error.message}`, error.stack);
+      if (error instanceof HttpException) throw error;
+      throw new HttpException(
+        {
+          status: HttpStatus.INTERNAL_SERVER_ERROR,
+          detalle: 'Error al eliminar el Tipo de Beca',
+          technical: error.message,
         },
-      };
-    } catch (e) {
-      console.error('Error al eliminar el TipoBeca:', JSON.stringify(e, null, 2));
-      return {
-        error: 'Error al eliminar el TipoBeca',
-        detalle: e.message ?? e,
-      };
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
     }
   }
 }

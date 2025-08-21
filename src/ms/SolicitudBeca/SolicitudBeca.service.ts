@@ -1,218 +1,259 @@
-import { Injectable } from '@nestjs/common';
+// src/app/ms/SolicitudBeca/SolicitudBeca.service.ts
+import { Injectable, Logger } from '@nestjs/common';
 import { SqlService } from '../../ms/cnxjs/sql.service';
 import { CreateSolicitudBecaDto } from './dto/create-SolicitudBeca.dto';
 
 @Injectable()
 export class SolicitudBecaService {
+  private readonly logger = new Logger(SolicitudBecaService.name);
+
   constructor(private readonly sqlService: SqlService) {}
+  
+  async getConnection() {
+    return await this.sqlService.getConnection();
+  }
 
-  async create(obj: CreateSolicitudBecaDto) {
+  /**
+   * MÉTODO PRINCIPAL - Obtiene todos los datos necesarios para el frontend
+   * Solución definitiva sin validaciones problemáticas
+   */
+  async getAllFrontendData() {
     try {
-      console.log('📥 DTO recibido en create():', obj);
+      this.logger.log('=== INICIANDO OBTENCIÓN DE DATOS PARA FRONTEND ===');
+      
+      // Obtener conexión a base de datos
+      const pool = await this.getConnection();
+      
+      // ==================== EJECUTAR PROCEDIMIENTOS ALMACENADOS ====================
+      // 1. Obtener todas las solicitudes de beca (con datos de lookup)
+      this.logger.log('Ejecutando: Beca.sp_Get_SolicitudBeca @Id=0');
+      const solicitudBecaResult = await pool.request().input('Id', 0).execute('Beca.sp_Get_SolicitudBeca');
+      const solicitudes = solicitudBecaResult.recordset || [];
+      this.logger.log(`Solicitudes obtenidas: ${solicitudes.length}`);
 
-      if (typeof obj.EstudianteId !== 'number' || isNaN(obj.EstudianteId)) {
-        return { error: 'EstudianteId debe ser un número válido, no booleano u otro tipo.' };
+      // 2. Obtener todos los estudiantes (procedimiento específico sin parámetros)
+      this.logger.log('Ejecutando: Beca.sp_Get_All_Estudiantes');
+      const estudianteResult = await pool.request().execute('Beca.sp_Get_All_Estudiantes');
+      const estudiantes = estudianteResult.recordset || [];
+      this.logger.log(`Estudiantes obtenidos: ${estudiantes.length}`);
+
+      // 3. Obtener todos los tipos de beca (procedimiento específico sin parámetros)
+      this.logger.log('Ejecutando: Beca.sp_Get_All_TipoBeca');
+      const tipoBecaResult = await pool.request().execute('Beca.sp_Get_All_TipoBeca');
+      const tiposBeca = tipoBecaResult.recordset || [];
+      this.logger.log(`Tipos de beca obtenidos: ${tiposBeca.length}`);
+
+      // 4. Obtener todos los estados (procedimiento específico sin parámetros)
+      this.logger.log('Ejecutando: Beca.sp_Get_All_Estado');
+      const estadoResult = await pool.request().execute('Beca.sp_Get_All_Estado');
+      const estados = estadoResult.recordset || [];
+      this.logger.log(`Estados obtenidos: ${estados.length}`);
+
+      // 5. Obtener todos los periodos académicos (procedimiento específico sin parámetros)
+      this.logger.log('Ejecutando: Beca.sp_Get_All_PeriodoAcademico');
+      const periodoAcademicoResult = await pool.request().execute('Beca.sp_Get_All_PeriodoAcademico');
+      const periodosAcademicos = periodoAcademicoResult.recordset || [];
+      this.logger.log(`Periodos académicos obtenidos: ${periodosAcademicos.length}`);
+
+      // ==================== RETORNAR DATOS ESTRUCTURADOS ====================
+      this.logger.log('=== DATOS OBTENIDOS EXITOSAMENTE ===');
+      return {
+        success: true,
+        timestamp: new Date().toISOString(),
+        data: {
+          solicitudes,
+          estudiantes,
+          tiposBeca,
+          estados,
+          periodosAcademicos
+        },
+        counts: {
+          solicitudes: solicitudes.length,
+          estudiantes: estudiantes.length,
+          tiposBeca: tiposBeca.length,
+          estados: estados.length,
+          periodosAcademicos: periodosAcademicos.length
+        }
+      };
+
+    } catch (error) {
+      this.logger.error('=== ERROR CRÍTICO EN getAllFrontendData ===');
+      this.logger.error('Error completo:', {
+        message: error.message,
+        stack: error.stack,
+        name: error.name
+      });
+      
+      // Retornar estructura segura sin lanzar excepciones
+      return {
+        success: false,
+        timestamp: new Date().toISOString(),
+        error: {
+          message: error.message,
+          type: error.constructor.name,
+          code: error.code || 'UNKNOWN_ERROR'
+        },
+        data: null,
+        counts: {
+          solicitudes: 0,
+          estudiantes: 0,
+          tiposBeca: 0,
+          estados: 0,
+          periodosAcademicos: 0
+        }
+      };
+    }
+  }
+
+  /**
+   * MÉTODO DE DEBUG - Para verificar conectividad y datos básicos
+   */
+  async debugDatabaseConnection() {
+    try {
+      this.logger.log('=== DEBUG: Verificando conexión a base de datos ===');
+      const pool = await this.getConnection();
+      
+      // Verificar que podemos ejecutar una consulta simple
+      const testResult = await pool.request().query('SELECT COUNT(*) as count FROM DbBecas.Beca.SolicitudBeca');
+      
+      return {
+        success: true,
+        message: 'Conexión a base de datos verificada',
+        testCount: testResult.recordset[0].count,
+        timestamp: new Date().toISOString()
+      };
+    } catch (error) {
+      this.logger.error('DEBUG ERROR:', error);
+      return {
+        success: false,
+        message: 'Error de conexión',
+        error: error.message,
+        timestamp: new Date().toISOString()
+      };
+    }
+  }
+
+  /**
+   * Obtiene una solicitud de beca por ID con manejo de errores robusto
+   */
+  async findOne(id: number) {
+    // Validación estricta de entrada - PREVENCIÓN DE NaN
+    if (id === undefined || id === null || isNaN(id) || id <= 0 || !Number.isInteger(id)) {
+      this.logger.warn(`findOne: ID inválido recibido - ${typeof id} ${id}`);
+      throw new Error(`ID inválido para búsqueda: ${id}`);
+    }
+
+    try {
+      this.logger.log(`findOne: Buscando solicitud con ID ${id}`);
+      const pool = await this.getConnection();
+      const result = await pool.request().input('Id', id).execute('Beca.sp_Get_SolicitudBeca');
+      
+      if (!result.recordset || result.recordset.length === 0) {
+        throw new Error(`Solicitud de Beca con ID ${id} no encontrada`);
       }
 
+      const solicitud = result.recordset[0];
+      
+      // Procesar y retornar datos con formato consistente
+      return {
+        Id: solicitud.Id,
+        EstudianteId: solicitud.EstudianteId,
+        TipoBecaId: solicitud.TipoBecaId,
+        EstadoId: solicitud.EstadoId,
+        FechaSolicitud: solicitud.FechaSolicitud ? new Date(solicitud.FechaSolicitud) : null,
+        PeriodoAcademicoId: solicitud.PeriodoAcademicoId,
+        Observaciones: solicitud.Observaciones,
+        Fecha_resultado: solicitud.Fecha_resultado ? new Date(solicitud.Fecha_resultado) : null,
+        EstudianteNombre: solicitud.EstudianteNombre || null,
+        EstudianteApellido: solicitud.EstudianteApellido || null,
+        TipoBecaNombre: solicitud.TipoBecaNombre || null,
+        Estadonombre: solicitud.Estadonombre || null,
+        PeriodoAcademicoNombre: solicitud.PeriodoAcademicoNombre ? 
+          `${solicitud.PeriodoAcademicoNombre} (${solicitud.PeriodoAnioAcademico})` : null
+      };
+    } catch (error) {
+      this.logger.error(`findOne: Error buscando solicitud ID ${id}:`, {
+        message: error.message,
+        stack: error.stack
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Obtiene todas las solicitudes de beca
+   */
+  async findAll() {
+    try {
+      this.logger.log('findAll: Obteniendo todas las solicitudes de beca');
+      const pool = await this.getConnection();
+      const result = await pool.request().input('Id', 0).execute('Beca.sp_Get_SolicitudBeca');
+      return result.recordset || [];
+    } catch (error) {
+      this.logger.error('findAll: Error obteniendo solicitudes:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Crea o actualiza una solicitud de beca
+   */
+  async create(dto: CreateSolicitudBecaDto) {
+    try {
       const pool = await this.sqlService.getConnection();
       const request = pool.request();
 
-      const id = obj.Id ?? 0;
-      const EstudianteId = Number(obj.EstudianteId);
-      const EstadoId = Number(obj.EstadoId);
-      const TipoBecaId = Number(obj.TipoBecaId);
-      const PeriodoAcademicoId = Number(obj.PeriodoAcademicoId);
+      const isUpdate = dto.Id && dto.Id > 0;
+      const solicitudBecaIdForSp = isUpdate ? dto.Id : 0;
 
-      request.input('Id', id);
-      request.input('EstudianteId', EstudianteId);
-      request.input('TipoBecaId', TipoBecaId);
-      request.input('EstadoId', EstadoId);
-      request.input('FechaSolicitud', obj.FechaSolicitud);
-      request.input('PeriodoAcademicoId', PeriodoAcademicoId);
-      request.input('Observaciones', obj.Observaciones);
-      request.input('Fecha_resultado', obj.Fecha_resultado);
- 
-
+      request.input('Id', solicitudBecaIdForSp);
+      request.input('EstudianteId', dto.EstudianteId);
+      request.input('TipoBecaId', dto.TipoBecaId);
+      request.input('EstadoId', dto.EstadoId);
+      request.input('FechaSolicitud', new Date(dto.FechaSolicitud));
+      request.input('PeriodoAcademicoId', dto.PeriodoAcademicoId);
+      request.input('Observaciones', dto.Observaciones || null);
+      request.input('Fecha_resultado', dto.Fecha_resultado ? new Date(dto.Fecha_resultado) : null);
 
       const result: any = await request.execute('Beca.sp_Save_SolicitudBeca');
+      
+      const newId = result.recordset?.[0]?.NewId || result.recordset?.[0]?.UpdatedId || solicitudBecaIdForSp;
 
-      const SolicitudBecaId =
-        result.recordset?.[0]?.NewId ||
-        result.recordset?.[0]?.UpdatedId ||
-        id;
-
-      const estudianteResult = await pool
-        .request()
-        .input('Id', EstudianteId)
-        .execute('Beca.sp_Get_Estudiante');
-      const estudianteNombre = estudianteResult.recordset?.[0]
-        ? `${estudianteResult.recordset[0].Nombre} ${estudianteResult.recordset[0].Apellido}`
-        : null;
-
-      const tipobecaResult = await pool
-        .request()
-        .input('Id', TipoBecaId)
-        .execute('Beca.sp_Get_TipoBeca');
-      const tipobecaNombre = tipobecaResult.recordset?.[0]?.Nombre ?? null;
-
-      const estadoResult = await pool
-        .request()
-        .input('Id', EstadoId)
-        .execute('Beca.sp_Get_Estado');
-      const estadoNombre = estadoResult.recordset?.[0]?.Nombre ?? null;
-
-      const periodoacademicoResult = await pool
-        .request()
-        .input('Id', PeriodoAcademicoId)
-        .execute('Beca.sp_Get_PeriodoAcademico');
-      const periodoacademicoNombre = periodoacademicoResult.recordset?.[0]?.Nombre ?? null;
-
-      return {
-        id: SolicitudBecaId,
-        EstudianteId,
-        Estudiantenombre: estudianteNombre,
-        TipoBecaId,
-        TipoBecanombre: tipobecaNombre,
-        EstadoId,
-        Estadonombre: estadoNombre,
-        FechaSolicitud: obj.FechaSolicitud,
-        PeriodoAcademicoId,
-        PeriodoAcademiconombre: periodoacademicoNombre,
-        Observaciones: obj.Observaciones,
-        Fecha_resultado: obj.Fecha_resultado,
-     
-      };
-    } catch (e) {
-      console.error('Error al ejecutar el SP:', JSON.stringify(e, null, 2));
-      return { error: 'Error interno', detalle: e.message ?? e };
-    }
-  }
-
-  async findAll() {
-    try {
-      const pool = await this.sqlService.getConnection();
-
-      const [solicitudesResult, estudiantesResult, estadosResult, tiposBecaResult, periodosResult] = await Promise.all([
-        pool.request().input('Id', 0).execute('Beca.sp_Get_SolicitudBeca'),
-        pool.request().input('Id', 0).execute('Beca.sp_Get_Estudiante'),
-        pool.request().input('Id', 0).execute('Beca.sp_Get_Estado'),
-        pool.request().input('Id', 0).execute('Beca.sp_Get_TipoBeca'),
-        pool.request().input('Id', 0).execute('Beca.sp_Get_PeriodoAcademico'),
-      ]);
-
-      const solicitudes = solicitudesResult.recordset;
-      const estudiantes = estudiantesResult.recordset;
-      const estados = estadosResult.recordset;
-      const tiposBeca = tiposBecaResult.recordset;
-      const periodos = periodosResult.recordset;
-
-      const solicitudesConNombres = solicitudes.map(s => {
-        const estudiante = estudiantes.find(e => e.Id === s.EstudianteId);
-        const estado = estados.find(e => e.Id === s.EstadoId);
-        const tipoBeca = tiposBeca.find(t => t.Id === s.TipoBecaId);
-        const periodo = periodos.find(p => p.Id === s.PeriodoAcademicoId);
-
-        return {
-          ...s,
-          Estudiantenombre: estudiante ? `${estudiante.Nombre} ${estudiante.Apellido}` : null,
-          TipoBecanombre: tipoBeca?.Nombre ?? null,
-          Estadonombre: estado?.Nombre ?? null,
-          PeriodoAcademiconombre: periodo?.Nombre ?? null,
-        };
-      });
-
-      return solicitudesConNombres;
-    } catch (e) {
-      console.error('Error al obtener los SolicitudBecas', JSON.stringify(e, null, 2));
-      return { error: 'Error al obtener los SolicitudBecas', detalle: e.message ?? e };
-    }
-  }
-
-  async findOne(id: number) {
-    try {
-      const pool = await this.sqlService.getConnection();
-
-      const SolicitudBecaResult: any = await pool
-        .request()
-        .input('Id', id)
-        .execute('Beca.sp_Get_SolicitudBeca');
-
-      if (SolicitudBecaResult.recordset.length === 0) {
-        return { mensaje: `SolicitudBeca con ID ${id} no encontrado` };
+      if (!newId && !isUpdate) {
+        throw new Error('El procedimiento almacenado no devolvió un NewId válido al guardar la solicitud de beca.');
       }
 
-      const solicitud = SolicitudBecaResult.recordset[0];
+      return await this.findOne(newId);
 
-      const [
-        estudianteResult,
-        estadoResult,
-        tipoBecaResult,
-        periodoResult
-      ] = await Promise.all([
-        pool.request().input('Id', solicitud.EstudianteId).execute('Beca.sp_Get_Estudiante'),
-        pool.request().input('Id', solicitud.EstadoId).execute('Beca.sp_Get_Estado'),
-        pool.request().input('Id', solicitud.TipoBecaId).execute('Beca.sp_Get_TipoBeca'),
-        pool.request().input('Id', solicitud.PeriodoAcademicoId).execute('Beca.sp_Get_PeriodoAcademico'),
-      ]);
-
-      return {
-        ...solicitud,
-        Estudiantenombre: estudianteResult.recordset?.[0]
-          ? `${estudianteResult.recordset[0].Nombre} ${estudianteResult.recordset[0].Apellido}` : null,
-        TipoBecanombre: tipoBecaResult.recordset?.[0]?.Nombre ?? null,
-        Estadonombre: estadoResult.recordset?.[0]?.Nombre ?? null,
-        PeriodoAcademiconombre: periodoResult.recordset?.[0]?.Nombre ?? null,
-      };
-    } catch (e) {
-      console.error('Error al buscar el SolicitudBeca por ID:', JSON.stringify(e, null, 2));
-      return { error: 'Error al buscar el SolicitudBeca', detalle: e.message ?? e };
+    } catch (error: any) {
+      this.logger.error(`Error al guardar Solicitud de Beca: ${error.message}`, error.stack);
+      throw error;
     }
   }
 
-  async remove(id: number) {
+  /**
+   * Actualiza una solicitud de beca existente
+   */
+  async update(id: number, dto: CreateSolicitudBecaDto) {
+      dto.Id = id;
+      return this.create(dto);
+  }
+
+  /**
+   * Elimina una solicitud de beca por su ID
+   */
+  async remove(id: number): Promise<{ mensaje: string }> {
     try {
       const pool = await this.sqlService.getConnection();
+      const result = await pool.request().input('Id', id).execute('Beca.sp_Delete_SolicitudBeca');
 
-      const SolicitudBecaResult: any = await pool
-        .request()
-        .input('Id', id)
-        .execute('Beca.sp_Get_SolicitudBeca');
-
-      if (SolicitudBecaResult.recordset.length === 0) {
-        return { mensaje: `SolicitudBeca con ID ${id} no encontrado` };
+      if (result.rowsAffected[0] === 0) {
+        throw new Error(`Solicitud de Beca con ID ${id} no encontrada o no se pudo eliminar.`);
       }
-
-      const solicitud = SolicitudBecaResult.recordset[0];
-
-      const [estudianteResult, estadoResult, tipoBecaResult, periodoResult] = await Promise.all([
-        pool.request().input('Id', solicitud.EstudianteId).execute('Beca.sp_Get_Estudiante'),
-        pool.request().input('Id', solicitud.EstadoId).execute('Beca.sp_Get_Estado'),
-        pool.request().input('Id', solicitud.TipoBecaId).execute('Beca.sp_Get_TipoBeca'),
-        pool.request().input('Id', solicitud.PeriodoAcademicoId).execute('Beca.sp_Get_PeriodoAcademico'),
-      ]);
-
-      await pool
-        .request()
-        .input('Id', id)
-        .execute('Beca.sp_Delete_SolicitudBeca');
-
-      return {
-        mensaje: `SolicitudBeca con ID ${id} eliminado correctamente`,
-        SolicitudBeca: {
-          ...solicitud,
-          Estudiantenombre: estudianteResult.recordset?.[0]
-            ? `${estudianteResult.recordset[0].Nombre} ${estudianteResult.recordset[0].Apellido}` : null,
-          TipoBecanombre: tipoBecaResult.recordset?.[0]?.Nombre ?? null,
-          Estadonombre: estadoResult.recordset?.[0]?.Nombre ?? null,
-          PeriodoAcademiconombre: periodoResult.recordset?.[0]?.Nombre ?? null,
-        },
-      };
-    } catch (e) {
-      console.error('Error al eliminar el SolicitudBeca:', JSON.stringify(e, null, 2));
-      return {
-        error: 'Error al eliminar el SolicitudBeca',
-        detalle: e.message ?? e,
-      };
+      return { mensaje: `Solicitud de Beca con ID ${id} eliminada correctamente` };
+    } catch (error: any) {
+      this.logger.error(`Error al eliminar Solicitud de Beca ID ${id}: ${error.message}`, error.stack);
+      throw error;
     }
   }
 }

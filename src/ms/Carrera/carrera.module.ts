@@ -1,10 +1,10 @@
 import { Module } from '@nestjs/common';
-import { carreraController } from './carrera.controller';
-import { carreraService } from './carrera.service';
+import { CarreraController } from './carrera.controller';
+import { CarreraService } from './carrera.service';
 import { SqlService } from '../cnxjs/sql.service';
 
 @Module({
-  controllers: [carreraController],
-  providers: [carreraService, SqlService]
+  controllers: [CarreraController],
+  providers: [CarreraService, SqlService],
 })
-export class carreraModule {}
+export class CarreraModule {}

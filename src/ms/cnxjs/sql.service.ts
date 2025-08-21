@@ -7,12 +7,13 @@ export class SqlService {
 
   private readonly config: sql.config = {
     user: 'sa',
-    password: '2005',
-    server: 'JEANFRANCO\\JEANFRANCO',
+    password: 'TuContrasena123!', // Cambia esta contraseña por la que usaste
+    server: 'localhost', // Cambiado de 'JEANFRANCO\\JEANFRANCO' a 'localhost'
     database: 'DbBecas',
     options: {
-      encrypt: true,
+      encrypt: false, // Cambiado a false para Docker
       trustServerCertificate: true,
+      port: 1433 // Puerto explícito
     },
   };
 

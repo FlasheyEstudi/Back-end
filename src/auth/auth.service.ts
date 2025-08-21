@@ -1,130 +1,59 @@
-import { Injectable, UnauthorizedException } from '@nestjs/common';
-import { JwtService } from '@nestjs/jwt';
+import { Injectable, UnauthorizedException, NotFoundException } from '@nestjs/common';
 import { UsuarioService } from '../ms/Usuario/usuario.service';
 import { CreateUsuarioDto } from '../ms/Usuario/dto/create-usuario.dto';
-import * as bcrypt from 'bcryptjs'; // 👈 usar bcryptjs en lugar de bcrypt nativo
+import { JwtService } from '@nestjs/jwt'; // <-- Añade esta línea
 
 @Injectable()
 export class AuthService {
   constructor(
-    private readonly jwtService: JwtService,
     private readonly usuarioService: UsuarioService,
+    private readonly jwtService: JwtService, // <-- Ya estaba bien
   ) {}
 
-  // 🔑 Validar credenciales de login
-  async validateCredentials(identifier: string, password: string): Promise<any> {
-    try {
-      console.log('Validando credenciales:', { identifier });
-
-      // Buscar usuario por Nombre (username)
-      const users = await this.usuarioService.findAll();
-      const user = users.find(
-        (u) => u.Nombre.toLowerCase() === identifier.toLowerCase(),
-      );
-
-      if (!user) {
-        console.log('Usuario no encontrado');
-        return null;
-      }
-
-      // Comparar contraseñas
-      const isPasswordValid = await bcrypt.compare(password, user.Contrasena);
-      if (!isPasswordValid) {
-        console.log('Contraseña incorrecta');
-        return null;
-      }
-
-      // Retornar usuario sin la contraseña
-      const { Contrasena: _, ...result } = user;
-      return result;
-    } catch (error) {
-      console.error('Error en validateCredentials:', error);
-      return null;
+  async register(userData: CreateUsuarioDto) {
+    const existingUser = await this.usuarioService.findOneByUsernameOrEmail(userData.Nombre);
+    if (existingUser) {
+      throw new UnauthorizedException('El usuario ya existe');
     }
+    const createdUser = await this.usuarioService.create(userData);
+    return createdUser;
   }
 
-  // 🔑 Login
-  async login(credentials: { identifier: string; password: string }) {
-    try {
-      const user = await this.validateCredentials(
-        credentials.identifier,
-        credentials.password,
-      );
-      if (!user) {
-        throw new UnauthorizedException('Credenciales inválidas');
-      }
-
-      const payload = {
-        nombre: user.Nombre,
-        sub: user.Id,
-        role: user.Role || 'user',
-      };
-
-      return {
-        status: 'success',
-        message: 'Login exitoso',
-        access_token: this.jwtService.sign(payload),
-        role: user.Role || 'user',
-      };
-    } catch (error) {
-      console.error('Error en login:', error);
-      throw error;
+  async login(identifier: string, password: string) {
+    const user = await this.usuarioService.findOneByUsernameOrEmail(identifier);
+    if (!user) {
+      throw new UnauthorizedException('Usuario no encontrado');
     }
+
+    const isPasswordValid = await this.usuarioService.validatePassword(
+      password,
+      user.Contrasena,
+    );
+
+    if (!isPasswordValid) {
+      throw new UnauthorizedException('Contraseña incorrecta');
+    }
+
+    const payload = { sub: user.Id, role: user.Role || 'estudiante', nombre: user.Nombre };
+    const token = this.jwtService.sign(payload);
+
+    return { 
+      access_token: token, 
+      user: { id: user.Id, nombre: user.Nombre, role: user.Role || 'estudiante' } 
+    };
   }
 
-  // 📝 Registro
-  async register(userData: {
-    username: string;
-    nombre: string;
-    apellidos?: string | null;
-    email: string;
-    password: string;
-    role?: string;
-  }) {
-    try {
-      if (!userData.username || !userData.nombre || !userData.email || !userData.password) {
-        throw new Error('Todos los campos son requeridos');
-      }
+  async validateUser(id: number) {
+    return this.usuarioService.findOne(id);
+  }
 
-      // Verificar duplicados
-      const users = await this.usuarioService.findAll();
-      const existingUser = users.find(
-        (u) =>
-          u.Nombre.toLowerCase() === userData.username.toLowerCase() ||
-          (u.Email && u.Email.toLowerCase() === userData.email.toLowerCase()),
-      );
-      if (existingUser) {
-        throw new Error('El usuario ya existe');
-      }
-
-      // Encriptar contraseña
-      const hashedPassword = await bcrypt.hash(userData.password, 10);
-
-      // Crear DTO
-      const createUsuarioDto: CreateUsuarioDto = {
-        Id: 0,
-        Nombre: userData.username,
-        Contrasena: hashedPassword,
-       Email: userData.email,
-        Apellidos: userData.apellidos || '',
-        Role: userData.role || 'user',
-      };
-
-      const result = await this.usuarioService.create(createUsuarioDto);
-
-      return {
-        status: 'success',
-        message: 'Usuario registrado correctamente',
-        data: {
-          id: result.id,
-          username: userData.username,
-          email: userData.email,
-          role: userData.role || 'user',
-        },
-      };
-    } catch (error) {
-      console.error('Error en registro:', error);
-      throw new Error(error.message || 'Error al registrar el usuario');
+  async validateUserById(userId: number) {
+    // Asegúrate de que userId no sea undefined
+    if (userId === undefined || userId === null) {
+      throw new NotFoundException('ID de usuario inválido');
     }
+    const user = await this.usuarioService.findOne(userId);
+    if (!user) return null;
+    return user;
   }
 }
