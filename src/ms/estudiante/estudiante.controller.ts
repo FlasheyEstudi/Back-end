@@ -1,9 +1,13 @@
-import { Controller, Post, Body, Get, Param, Delete, Query, Logger, NotFoundException, ValidationPipe } from '@nestjs/common';
+import { 
+  Controller, Post, Body, Get, Param, Delete, Query, Logger, NotFoundException, ValidationPipe, UseGuards 
+} from '@nestjs/common';
 import { EstudianteService } from './estudiante.service';
 import { CreateEstudianteDto } from './dto/create-estudiante.dto';
 import { SqlService } from '../cnxjs/sql.service';
+import { JwtAuthGuard } from '../../auth/jwt-auth-guard';
 
 @Controller('estudiante')
+@UseGuards(JwtAuthGuard) // 🔐 Protege todas las rutas con JWT
 export class EstudianteController {
   private readonly logger = new Logger(EstudianteController.name);
 
@@ -26,7 +30,7 @@ export class EstudianteController {
     return await this.estudianteService.findAll();
   }
 
-  // Obtener detalles (temporal)
+  // Endpoint temporal para detalles adicionales
   @Get('detalle')
   async getDetalle() {
     this.logger.log('Obteniendo detalles de estudiantes');
@@ -38,13 +42,15 @@ export class EstudianteController {
     }));
   }
 
-  // **Ruta estática primero**
+  // NUEVO ENDPOINT: Mapea usuario ID a estudiante ID
   @Get('mapa-id')
   async mapUserToEstudiante(@Query('userId') userId: string) {
     this.logger.log('Mapeando userId: ' + userId);
+
     if (!userId || isNaN(Number(userId)) || Number(userId) <= 0) {
       throw new NotFoundException('userId inválido');
     }
+
     const pool = await this.sqlService.getConnection();
     const result = await pool.request()
       .input('UserId', Number(userId))
@@ -54,10 +60,11 @@ export class EstudianteController {
     if (!estudianteId) {
       throw new NotFoundException('No se encontró un estudiante asociado al userId');
     }
+
     return { estudianteId };
   }
 
-  // **Ruta dinámica al final**
+  // Obtener un estudiante por ID (ruta dinámica al final)
   @Get(':id')
   async findOne(@Param('id') id: string) {
     this.logger.log('Obteniendo estudiante ID: ' + id);
@@ -68,9 +75,7 @@ export class EstudianteController {
     try {
       return await this.estudianteService.findOne(numId);
     } catch (error) {
-      if (error instanceof NotFoundException) {
-        throw error;
-      }
+      if (error instanceof NotFoundException) throw error;
       throw new Error(`Error interno al buscar estudiante: ${error.message}`);
     }
   }

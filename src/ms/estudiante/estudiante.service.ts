@@ -1,4 +1,4 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, BadRequestException } from '@nestjs/common';
 import { SqlService } from '../cnxjs/sql.service';
 import { CreateEstudianteDto } from './dto/create-estudiante.dto';
 import * as bcrypt from 'bcrypt';
@@ -9,6 +9,32 @@ export class EstudianteService {
   private readonly saltRounds = 10;
 
   constructor(private readonly sqlService: SqlService) {}
+
+  // ✅ NUEVO MÉTODO: Mapear usuario ID a estudiante ID
+  async mapUserToEstudiante(userId: number): Promise<{ estudianteId: number }> {
+    try {
+      this.logger.log(`🔍 Mapeando usuario ID ${userId} a estudiante`);
+      
+      const pool = await this.sqlService.getConnection();
+      const request = pool.request();
+      request.input('UserId', userId);
+      
+      const result = await request.execute('Beca.sp_Map_UserToEstudiante');
+      
+      if (result.recordset.length === 0) {
+        this.logger.warn(`❌ No se encontró estudiante para usuario ${userId}`);
+        throw new NotFoundException('No se encontró un estudiante asociado al usuario.');
+      }
+      
+      const estudianteId = result.recordset[0].EstudianteId;
+      this.logger.log(`✅ Usuario ${userId} mapeado a estudiante ${estudianteId}`);
+      
+      return { estudianteId };
+    } catch (error) {
+      this.logger.error(`❌ Error mapping user to student: ${error.message}`, error.stack);
+      throw new BadRequestException('Error al mapear usuario a estudiante');
+    }
+  }
 
   private generateTemporaryPassword(length: number = 12): string {
     const uppercase = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
@@ -35,13 +61,13 @@ export class EstudianteService {
     role: string = 'estudiante'
   ): Promise<{ username: string; password: string; hashedPassword: string }> {
     try {
-      this.logger.log(`Creando usuario para estudiante ID: ${estudianteId}, Email: ${email}`);
+      this.logger.log(`👤 Creando usuario para estudiante ID: ${estudianteId}, Email: ${email}`);
       const pool = await this.sqlService.getConnection();
       const request = pool.request();
       const username = email.split('@')[0];
       const tempPassword = this.generateTemporaryPassword();
       const hashedPassword = await bcrypt.hash(tempPassword, this.saltRounds);
-      this.logger.log(`Contraseña generada para ${username}`);
+      this.logger.log(`🔑 Contraseña generada para ${username}`);
       request.input('Id', 0);
       request.input('Nombre', username);
       request.input('Contrasena', hashedPassword);
@@ -52,17 +78,17 @@ export class EstudianteService {
       const result = await request.execute('Beca.sp_Save_Usuario');
       const usuarioId = result.recordset?.[0]?.NewId;
       if (!usuarioId) throw new Error('No se devolvió un ID de usuario válido');
-      this.logger.log(`Usuario creado con ID: ${usuarioId}`);
+      this.logger.log(`✅ Usuario creado con ID: ${usuarioId}`);
       return { username, password: tempPassword, hashedPassword };
     } catch (error: any) {
-      this.logger.error(`Error creando usuario para estudiante ${estudianteId}: ${error.message}`, error.stack);
+      this.logger.error(`❌ Error creando usuario para estudiante ${estudianteId}: ${error.message}`, error.stack);
       throw new Error('No se pudo crear el usuario: ' + error.message);
     }
   }
 
   async create(obj: CreateEstudianteDto) {
     try {
-      this.logger.log('Creando estudiante: ' + JSON.stringify(obj));
+      this.logger.log('➕ Creando estudiante: ' + JSON.stringify(obj));
       const pool = await this.sqlService.getConnection();
       const request = pool.request();
       const id = obj.Id ?? 0;
@@ -80,7 +106,7 @@ export class EstudianteService {
       if (!estudianteId && id === 0) {
         throw new Error('No se devolvió un ID válido al crear el estudiante');
       }
-      this.logger.log(`Estudiante creado/actualizado con ID: ${estudianteId}`);
+      this.logger.log(`✅ Estudiante creado/actualizado con ID: ${estudianteId}`);
       const credenciales = await this.createUserForStudent(estudianteId, obj.Correo, obj.Nombre, obj.Apellido);
       const estadoNombre = await this.getNombreById('Beca.sp_Get_Estado', EstadoId);
       const carreraNombre = await this.getNombreById('Beca.sp_Get_Carrera', CarreraId);
@@ -103,7 +129,7 @@ export class EstudianteService {
         },
       };
     } catch (error: any) {
-      this.logger.error(`Error creando estudiante: ${error.message}`, error.stack);
+      this.logger.error(`❌ Error creando estudiante: ${error.message}`, error.stack);
       throw error;
     }
   }
@@ -112,7 +138,7 @@ export class EstudianteService {
     try {
       const pool = await this.sqlService.getConnection();
       const result: any = await pool.request().execute('Beca.sp_Get_All_Estudiantes');
-      this.logger.log(`Estudiantes obtenidos: ${JSON.stringify(result.recordset)}`);
+      this.logger.log(`📋 Estudiantes obtenidos: ${result.recordset?.length || 0}`);
       const estudiantes = result.recordset || [];
       const estadosResult: any = await pool.request().input('Id', 0).execute('Beca.sp_Get_Estado');
       const estados = estadosResult.recordset;
@@ -124,8 +150,8 @@ export class EstudianteService {
         carreraNombre: carreras.find((c: any) => c.Id === est.CarreraId)?.Nombre ?? null,
       }));
     } catch (error: any) {
-      this.logger.error(`Error al obtener estudiantes: ${error.message}`, error.stack);
-      throw error instanceof NotFoundException ? error : new Error(`Error al obtener estudiantes: ${error.message}`);
+      this.logger.error(`❌ Error al obtener estudiantes: ${error.message}`, error.stack);
+      throw error;
     }
   }
 
@@ -133,7 +159,7 @@ export class EstudianteService {
     try {
       const pool = await this.sqlService.getConnection();
       const result: any = await pool.request().input('Id', id).execute('Beca.sp_Get_Estudiante');
-      this.logger.log(`Resultado de sp_Get_Estudiante para ID ${id}: ${JSON.stringify(result.recordset)}`);
+      this.logger.log(`🔍 Resultado de sp_Get_Estudiante para ID ${id}: ${result.recordset?.length || 0} registros`);
       if (result.recordset.length === 0) {
         throw new NotFoundException(`Estudiante con ID ${id} no encontrado`);
       }
@@ -146,8 +172,8 @@ export class EstudianteService {
         carreraNombre,
       };
     } catch (error: any) {
-      this.logger.error(`Error al buscar estudiante por ID ${id}: ${error.message}`, error.stack);
-      throw error instanceof NotFoundException ? error : new Error(`Error al buscar estudiante: ${error.message}`);
+      this.logger.error(`❌ Error al buscar estudiante por ID ${id}: ${error.message}`, error.stack);
+      throw error;
     }
   }
 
@@ -158,16 +184,16 @@ export class EstudianteService {
       if (result.rowsAffected[0] === 0) {
         throw new NotFoundException(`Estudiante con ID ${id} no encontrado o no se pudo eliminar`);
       }
-      return { mensaje: `Estudiante con ID ${id} eliminado correctamente` };
+      return { mensaje: `✅ Estudiante con ID ${id} eliminado correctamente` };
     } catch (error: any) {
-      this.logger.error(`Error al eliminar estudiante ID ${id}: ${error.message}`, error.stack);
+      this.logger.error(`❌ Error al eliminar estudiante ID ${id}: ${error.message}`, error.stack);
       throw error;
     }
   }
 
   private async getNombreById(spName: string, id: number | null): Promise<string | null> {
     if (id === null || id === undefined || id <= 0) {
-      this.logger.warn(`ID inválido para ${spName}: ${id}`);
+      this.logger.warn(`⚠️ ID inválido para ${spName}: ${id}`);
       return null;
     }
     try {
@@ -175,10 +201,9 @@ export class EstudianteService {
       const request = pool.request();
       request.input('Id', id);
       const result = await request.execute(spName);
-      this.logger.log(`Resultado de ${spName} para ID ${id}: ${JSON.stringify(result.recordset)}`);
       return result.recordset?.[0]?.Nombre ?? null;
     } catch (error: any) {
-      this.logger.error(`Error obteniendo nombre desde ${spName} para ID ${id}: ${error.message}`, error.stack);
+      this.logger.error(`❌ Error obteniendo nombre desde ${spName} para ID ${id}: ${error.message}`, error.stack);
       return null;
     }
   }

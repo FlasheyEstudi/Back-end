@@ -16,16 +16,25 @@ export class AuthService {
     const isPasswordValid = await this.usuarioService.validatePassword(password, user.Contrasena);
     if (!isPasswordValid) throw new UnauthorizedException('Contraseña incorrecta');
 
-    const payload = { sub: user.Id, role: user.Role || 'estudiante', nombre: user.Nombre };
+    const payload = { 
+      sub: user.Id, 
+      role: user.Role || 'estudiante', 
+      nombre: user.Nombre,
+      email: user.Correo // ✅ CAMBIADO: Email -> Correo
+    };
     const token = this.jwtService.sign(payload);
 
     return {
       access_token: token,
-      user: { id: user.Id, nombre: user.Nombre, role: user.Role || 'estudiante' },
+      user: { 
+        id: user.Id, 
+        nombre: user.Nombre, 
+        role: user.Role || 'estudiante',
+        email: user.Correo // ✅ CAMBIADO: Email -> Correo
+      },
     };
   }
 
-  // ✅ NUEVO: Registro de usuario
   async register(data: {
     Nombre: string;
     Apellidos: string;
@@ -54,18 +63,33 @@ export class AuthService {
     });
 
     // Generar token de autenticación
-    const payload = { sub: newUser.Id, role: newUser.Role, nombre: newUser.Nombre };
+    const payload = { 
+      sub: newUser.Id, 
+      role: newUser.Role, 
+      nombre: newUser.Nombre,
+      email: newUser.Correo // ✅ CAMBIADO: Email -> Correo
+    };
     const token = this.jwtService.sign(payload);
 
     return {
       access_token: token,
-      user: { id: newUser.Id, nombre: newUser.Nombre, role: newUser.Role },
+      user: { 
+        id: newUser.Id, 
+        nombre: newUser.Nombre, 
+        role: newUser.Role,
+        email: newUser.Correo // ✅ CAMBIADO: Email -> Correo
+      },
     };
   }
 
   async changePassword(userId: number, currentPassword: string, newPassword: string) {
+    // ✅ Verificar que userId sea válido
+    if (!userId || userId <= 0) {
+      throw new NotFoundException('ID de usuario inválido');
+    }
+
     const user = await this.usuarioService.findOne(userId);
-    if (!user) throw new NotFoundException('Usuario no encontrado');
+    if (!user) throw new NotFoundException(`Usuario con ID ${userId} no encontrado`);
 
     const isValid = await this.usuarioService.validatePassword(currentPassword, user.Contrasena);
     if (!isValid) throw new UnauthorizedException('Contraseña actual incorrecta');
@@ -77,8 +101,13 @@ export class AuthService {
   }
 
   async validateUserById(userId: number) {
-    if (!userId) return null;
+    if (!userId || userId <= 0) return null;
     const user = await this.usuarioService.findOne(userId);
-    return user ? { id: user.Id, nombre: user.Nombre, role: user.Role } : null;
+    return user ? { 
+      id: user.Id, 
+      nombre: user.Nombre, 
+      role: user.Role, 
+      email: user.Correo // ✅ CAMBIADO: Email -> Correo
+    } : null;
   }
 }

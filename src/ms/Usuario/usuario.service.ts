@@ -15,29 +15,40 @@ export class UsuarioService {
     return await bcrypt.hash(password, 10);
   }
 
+  // ✅ Buscar por nombre o correo
   async findOneByUsernameOrEmail(identifier: string) {
     try {
       const pool = await this.sqlService.getConnection();
       const request = pool.request();
-      
       request.input('Nombre', identifier);
       const result = await request.execute('Beca.sp_Get_Usuario_By_Identifier');
-      
-      return result.recordset.length > 0 ? result.recordset[0] : null;
+
+      if (result.recordset.length > 0) {
+        const user = result.recordset[0];
+        return {
+          Id: user.Id,
+          Nombre: user.Nombre,
+          Contrasena: user.Contrasena,
+          Apellidos: user.Apellidos,
+          Correo: user.Email,
+          Role: user.Role
+        };
+      }
+      return null;
     } catch (error) {
       console.error('Error buscando usuario por nombre o email:', error);
       throw new BadRequestException('Error al buscar usuario');
     }
   }
 
+  // ✅ Buscar por ID
   async findOne(id: number) {
     try {
       const pool = await this.sqlService.getConnection();
       const request = pool.request();
-      
       request.input('Id', id);
       const result = await request.execute('Beca.sp_Get_Usuario');
-      
+
       if (result.recordset.length > 0) {
         const user = result.recordset[0];
         return {
@@ -46,7 +57,7 @@ export class UsuarioService {
           Apellidos: user.Apellidos,
           Correo: user.Email,
           Role: user.Role,
-          Contrasena: user.Contrasena, // Ya está hasheada
+          Contrasena: user.Contrasena,
         };
       }
       throw new NotFoundException(`Usuario con ID ${id} no encontrado`);
@@ -56,11 +67,11 @@ export class UsuarioService {
     }
   }
 
+  // ✅ Listar todos los usuarios
   async findAll() {
     try {
       const pool = await this.sqlService.getConnection();
       const request = pool.request();
-
       request.input('Id', 0);
       const result = await request.execute('Beca.sp_Get_Usuario');
 
@@ -77,19 +88,14 @@ export class UsuarioService {
     }
   }
 
-  // ✅ NUEVO: Buscar por correo (usa el SP existente)
+  // ✅ Buscar usuario por correo
   async findOneByEmail(email: string) {
+    if (!email || typeof email !== 'string') return null;
     try {
-      if (!email || typeof email !== 'string') {
-        return null;
-      }
-
       const pool = await this.sqlService.getConnection();
       const request = pool.request();
-      
-      request.input('Nombre', email); // Usa el SP existente
+      request.input('Nombre', email);
       const result = await request.execute('Beca.sp_Get_Usuario_By_Identifier');
-      
       return result.recordset.length > 0 ? result.recordset[0] : null;
     } catch (error) {
       console.error('Error buscando usuario por email:', error);
@@ -97,22 +103,16 @@ export class UsuarioService {
     }
   }
 
-  // ✅ CORREGIDO: create() ahora devuelve el usuario completo
+  // ✅ Crear usuario y devolver usuario completo
   async create(userData: CreateUsuarioDto) {
     try {
-      if (!userData.Contrasena) {
-        throw new BadRequestException('La contraseña es requerida');
-      }
+      if (!userData.Contrasena) throw new BadRequestException('La contraseña es requerida');
 
       const pool = await this.sqlService.getConnection();
       const request = pool.request();
-
-      // ✅ Hashear la contraseña
       const hashedPassword = await this.hashPassword(userData.Contrasena);
 
-      const id = userData.Id ?? 0;
-
-      request.input('Id', id);
+      request.input('Id', userData.Id ?? 0);
       request.input('Nombre', userData.Nombre);
       request.input('Contrasena', hashedPassword);
       request.input('Apellidos', userData.Apellidos || null);
@@ -121,40 +121,29 @@ export class UsuarioService {
 
       const result = await request.execute('Beca.sp_Save_Usuario');
 
-      let newId: number;
-
-      if (result.recordset && result.recordset.length > 0) {
-        newId = result.recordset[0].NewId || result.recordset[0].UpdatedId || id;
-      } else {
-        throw new BadRequestException('No se pudo obtener el ID del usuario creado');
-      }
-
-      // ✅ Retornar el usuario completo usando findOne
+      const newId = result.recordset?.[0]?.NewId || result.recordset?.[0]?.UpdatedId || userData.Id;
       return await this.findOne(newId);
 
     } catch (error) {
       console.error('Error creando usuario:', error);
-
-      // Si el SP ya lanza error por email duplicado, lo capturamos
       if (error.message?.includes('correo electrónico ya está registrado')) {
         throw new ConflictException('El correo ya está registrado');
       }
-
       throw error;
     }
   }
 
+  // ✅ Actualizar contraseña
   async updatePassword(userId: number, newPassword: string) {
     try {
       const pool = await this.sqlService.getConnection();
       const request = pool.request();
-      
       const hashedPassword = await this.hashPassword(newPassword);
 
       request.input('Id', userId);
       request.input('Password', hashedPassword);
-      
       await request.execute('Beca.sp_Update_Password');
+
       return { message: `Contraseña actualizada para el usuario con ID ${userId}` };
     } catch (error) {
       console.error('Error actualizando contraseña:', error);
@@ -162,14 +151,13 @@ export class UsuarioService {
     }
   }
 
+  // ✅ Eliminar usuario
   async remove(id: number) {
     try {
       const pool = await this.sqlService.getConnection();
       const request = pool.request();
-
       request.input('Id', id);
       await request.execute('Beca.sp_Delete_Usuario');
-
       return { mensaje: `Usuario con ID ${id} eliminado correctamente` };
     } catch (error) {
       console.error('Error al eliminar usuario:', error);
@@ -177,10 +165,9 @@ export class UsuarioService {
     }
   }
 
+  // ✅ Validar contraseña
   async validatePassword(password: string, hashedPassword: string): Promise<boolean> {
-    if (!password || !hashedPassword) {
-      return false;
-    }
+    if (!password || !hashedPassword) return false;
     return await bcrypt.compare(password, hashedPassword);
   }
 }

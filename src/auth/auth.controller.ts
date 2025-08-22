@@ -1,4 +1,4 @@
-import { Controller, Post, Body, UseGuards } from '@nestjs/common';
+import { Controller, Post, Body, UseGuards, UnauthorizedException } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { JwtAuthGuard } from './jwt-auth-guard';
 import { User } from '../common/decorators/user.decorator';
@@ -7,13 +7,14 @@ import { User } from '../common/decorators/user.decorator';
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
+  // 🔑 Login
   @Post('login')
   async login(@Body() body: { identifier: string; password: string }) {
     const { identifier, password } = body;
     return this.authService.login(identifier, password);
   }
 
-  // ✅ NUEVO: Endpoint de registro
+  // ✅ Registro de usuario
   @Post('register')
   async register(
     @Body() body: {
@@ -27,13 +28,21 @@ export class AuthController {
     return this.authService.register(body);
   }
 
+  // 🔐 Cambio de contraseña
   @Post('change-password')
   @UseGuards(JwtAuthGuard)
   async changePassword(
-    @User() user: any,
+    @User() user: any, // ✅ Usuario autenticado desde JWT
     @Body() body: { currentPassword: string; newPassword: string }
   ) {
+    const userId = user?.sub;
+    if (!userId) {
+      throw new UnauthorizedException('Usuario no autenticado');
+    }
+
     const { currentPassword, newPassword } = body;
-    return this.authService.changePassword(user.sub, currentPassword, newPassword);
+    return this.authService.changePassword(userId, currentPassword, newPassword);
   }
+
+  // 🔹 Otros endpoints de Auth pueden agregarse aquí
 }
