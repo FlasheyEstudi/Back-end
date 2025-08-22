@@ -7,6 +7,14 @@ import * as bcrypt from 'bcrypt';
 export class UsuarioService {
   constructor(private readonly sqlService: SqlService) {}
 
+  // ✅ Método reutilizable para hashear contraseñas
+  async hashPassword(password: string): Promise<string> {
+    if (!password || typeof password !== 'string' || password.length < 6) {
+      throw new BadRequestException('La contraseña debe tener al menos 6 caracteres');
+    }
+    return await bcrypt.hash(password, 10);
+  }
+
   async findOneByUsernameOrEmail(identifier: string) {
     try {
       const pool = await this.sqlService.getConnection();
@@ -17,9 +25,8 @@ export class UsuarioService {
       
       return result.recordset.length > 0 ? result.recordset[0] : null;
     } catch (error) {
-      // Log the error for debugging but return null for registration
       console.error('Error buscando usuario:', error);
-      return null; // Non-existent user is valid for registration
+      return null;
     }
   }
 
@@ -58,36 +65,24 @@ export class UsuarioService {
 
   async create(userData: CreateUsuarioDto) {
     try {
-      // Validar explícitamente la contraseña
-      if (!userData.Contrasena || typeof userData.Contrasena !== 'string' || userData.Contrasena.length < 6) {
-        throw new BadRequestException('La contraseña es requerida y debe tener al menos 6 caracteres');
+      if (!userData.Contrasena) {
+        throw new BadRequestException('La contraseña es requerida');
       }
 
       const pool = await this.sqlService.getConnection();
       const request = pool.request();
 
-      // Encriptar la contraseña
-      const hashedPassword = await bcrypt.hash(userData.Contrasena, 10);
+      // ✅ Usa el nuevo método
+      const hashedPassword = await this.hashPassword(userData.Contrasena);
 
-      // Siempre enviar Id; 0 si es nuevo usuario
       const id = userData.Id ?? 0;
 
-      // Enviar parámetros al procedimiento almacenado
       request.input('Id', id);
       request.input('Nombre', userData.Nombre);
       request.input('Contrasena', hashedPassword);
       request.input('Apellidos', userData.Apellidos || null);
       request.input('Email', userData.Correo || null);
       request.input('Role', userData.Role || 'estudiante');
-
-      console.log('Parámetros enviados:', {
-        Id: id,
-        Nombre: userData.Nombre,
-        Contrasena: hashedPassword,
-        Apellidos: userData.Apellidos || null,
-        Email: userData.Correo || null,
-        Role: userData.Role || 'estudiante',
-      });
 
       const result = await request.execute('Beca.sp_Save_Usuario');
 
@@ -100,20 +95,18 @@ export class UsuarioService {
       return { id };
     } catch (error) {
       console.error('Error creando usuario:', error);
-      throw error; // Propagar el error para que AuthService lo maneje
+      throw error;
     }
   }
 
   async updatePassword(userId: number, newPassword: string) {
     try {
-      if (!newPassword || typeof newPassword !== 'string' || newPassword.length < 6) {
-        throw new BadRequestException('La nueva contraseña es requerida y debe tener al menos 6 caracteres');
-      }
-
       const pool = await this.sqlService.getConnection();
       const request = pool.request();
       
-      const hashedPassword = await bcrypt.hash(newPassword, 10);
+      // ✅ Usa el nuevo método
+      const hashedPassword = await this.hashPassword(newPassword);
+
       request.input('Id', userId);
       request.input('Password', hashedPassword);
       
