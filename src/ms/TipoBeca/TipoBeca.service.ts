@@ -40,6 +40,7 @@ export class TipoBecaService {
       request.input('EstadoId', dto.EstadoId);
       request.input('FechaRegistro', dto.FechaRegistro || null);
       request.input('FechaModificacion', dto.FechaModificacion || null);
+      request.input('FechaLimite', dto.FechaLimite || null); // Nuevo campo
 
       const result: any = await request.execute('Beca.sp_Save_TipoBeca');
       const newId = result.recordset?.[0]?.NewId || result.recordset?.[0]?.UpdatedId || tipoBecaIdForSp;
@@ -52,12 +53,13 @@ export class TipoBecaService {
         Nombre: dto.Nombre,
         Descripcion: dto.Descripcion || null,
         Monto: dto.Monto,
-        Cobertura: dto.PorcentajeCobertura,
+        PorcentajeCobertura: dto.PorcentajeCobertura,
         Prioridad: dto.Prioridad,
-        ColorIdentificativo: dto.ColorHex || null,
+        ColorHex: dto.ColorHex || null,
         EstadoId: dto.EstadoId,
         Estadonombre: estadoNombre,
-        Beneficiarios: 0
+        Beneficiarios: 0,
+        FechaLimite: dto.FechaLimite || null, // Nuevo campo
       };
 
       this.logger.log(`TipoBeca guardado/actualizado ID ${newId}: ${dto.Nombre}`);
@@ -93,10 +95,28 @@ export class TipoBecaService {
       const tiposBecaResult: any = await pool.request().input('Id', 0).execute('Beca.sp_Get_TipoBeca');
       const tiposBeca = tiposBecaResult.recordset;
       const estadosAll = await pool.request().input('Id', 0).execute('Beca.sp_Get_Estado').then(res => res.recordset);
-      return tiposBeca.map(tb => ({
-        ...tb,
-        Estadonombre: estadosAll.find(s => s.Id === tb.EstadoId)?.Nombre ?? null
-      }));
+
+      // Obtener detalles de requisitos usando @TipoBecaId
+      const detallesResult: any = await pool.request().input('TipoBecaId', 0).execute('Beca.sp_Get_Detalle_Requisitos_Beca');
+      const detalles = detallesResult.recordset;
+      const requisitosPorBeca = detalles.reduce((acc: { [key: number]: number }, detalle: any) => {
+        acc[detalle.TipoBecaId] = (acc[detalle.TipoBecaId] || 0) + 1;
+        return acc;
+      }, {});
+
+      return tiposBeca.map(tb => {
+        const requisitosFiltrados = detalles.filter((d: any) => d.TipoBecaId === tb.Id);
+        const requisitosPrincipales = requisitosFiltrados.length > 0 
+          ? requisitosFiltrados.map((d: any) => d.RequisitoId).join(', ') 
+          : null;
+        return {
+          ...tb,
+          Estadonombre: estadosAll.find(s => s.Id === tb.EstadoId)?.Nombre ?? null,
+          FechaLimite: tb.FechaLimite || null,
+          RequisitosPrincipales: requisitosPrincipales,
+          RequisitosAdicionales: requisitosPorBeca[tb.Id] || 0
+        };
+      });
     } catch (error: any) {
       this.logger.error(`Error al obtener todos los TipoBecas: ${error.message}`, error.stack);
       throw new HttpException(
@@ -119,7 +139,22 @@ export class TipoBecaService {
       }
       const tipoBeca = tipoBecaResult.recordset[0];
       const estadoNombre = await this.getNombreById('Beca.sp_Get_Estado', tipoBeca.EstadoId);
-      return { ...tipoBeca, Estadonombre: estadoNombre };
+
+      // Obtener detalles de requisitos para este TipoBeca
+      const detallesResult: any = await pool.request().input('TipoBecaId', id).execute('Beca.sp_Get_Detalle_Requisitos_Beca');
+      const detalles = detallesResult.recordset;
+      const requisitosPrincipales = detalles.length > 0 
+        ? detalles.map((d: any) => d.RequisitoId).join(', ') 
+        : null;
+      const requisitosAdicionales = detalles.length;
+
+      return {
+        ...tipoBeca,
+        Estadonombre: estadoNombre,
+        FechaLimite: tipoBeca.FechaLimite || null,
+        RequisitosPrincipales: requisitosPrincipales,
+        RequisitosAdicionales: requisitosAdicionales
+      };
     } catch (error: any) {
       this.logger.error(`Error al buscar TipoBeca por ID ${id}: ${error.message}`, error.stack);
       throw new HttpException(
@@ -169,12 +204,13 @@ export class TipoBecaService {
         Nombre: tipoBeca.Nombre,
         Descripcion: tipoBeca.Descripcion,
         Monto: tipoBeca.Monto,
-        PorcentajeCobertura: tipoBeca.Cobertura,
+        PorcentajeCobertura: tipoBeca.PorcentajeCobertura,
         Prioridad: tipoBeca.Prioridad,
-        ColorHex: tipoBeca.ColorIdentificativo,
+        ColorHex: tipoBeca.ColorHex,
         EstadoId: estadoId,
         FechaRegistro: tipoBeca.FechaRegistro,
-        FechaModificacion: new Date().toISOString().split('T')[0]
+        FechaModificacion: new Date().toISOString().split('T')[0],
+        FechaLimite: tipoBeca.FechaLimite || null // Incluir FechaLimite
       });
     } catch (error: any) {
       this.logger.error(`Error al actualizar estado del TipoBeca ID ${id}: ${error.message}`, error.stack);

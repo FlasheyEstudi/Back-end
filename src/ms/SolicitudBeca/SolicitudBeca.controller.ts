@@ -8,7 +8,9 @@ import {
   Delete,
   Put,
   Logger,
-  UseGuards
+  UseGuards,
+  BadRequestException,
+  NotFoundException
 } from '@nestjs/common';
 import { SolicitudBecaService } from './SolicitudBeca.service';
 import { CreateSolicitudBecaDto } from './dto/create-SolicitudBeca.dto';
@@ -23,7 +25,6 @@ export class SolicitudBecaController {
 
   /**
    * ENDPOINT PRINCIPAL - Datos completos para frontend
-   * Este endpoint está diseñado para evitar cualquier validación problemática
    */
   @Get('frontend-data')
   async getFrontendData() {
@@ -34,11 +35,7 @@ export class SolicitudBecaController {
       return result;
     } catch (error) {
       this.logger.error('=== ERROR: getFrontendData falló ===', error);
-      return {
-        success: false,
-        error: 'Error interno del servidor',
-        timestamp: new Date().toISOString()
-      };
+      throw new BadRequestException('Error al obtener datos para frontend');
     }
   }
 
@@ -52,7 +49,7 @@ export class SolicitudBecaController {
   }
 
   /**
-   * ENDPOINT EXISTENTE - Todas las solicitudes
+   * ENDPOINT CRUD - Todas las solicitudes
    */
   @Get()
   async findAll() {
@@ -61,7 +58,7 @@ export class SolicitudBecaController {
   }
 
   /**
-   * ENDPOINT EXISTENTE - Una solicitud específica (con manejo seguro)
+   * ENDPOINT CRUD - Una solicitud específica (con manejo seguro)
    */
   @Get(':id')
   async findOne(@Param('id') id: string) {
@@ -70,14 +67,10 @@ export class SolicitudBecaController {
     // Conversión segura
     const idNum = parseInt(id, 10);
     
-    // Validación segura sin lanzar excepciones HTTP
+    // Validación segura
     if (isNaN(idNum) || idNum <= 0) {
       this.logger.warn(`findOne: ID inválido recibido: ${id}`);
-      return { 
-        error: 'ID inválido', 
-        received: id,
-        message: 'El ID debe ser un número entero positivo'
-      };
+      throw new BadRequestException('ID inválido. Debe ser un número entero positivo');
     }
     
     try {
@@ -85,37 +78,60 @@ export class SolicitudBecaController {
       return result;
     } catch (error) {
       this.logger.error(`findOne: Error buscando ID ${idNum}:`, error);
-      return { 
-        error: error.message,
-        id: idNum
-      };
+      throw new NotFoundException(`Solicitud con ID ${idNum} no encontrada`);
     }
   }
 
-  // Resto de endpoints existentes...
+  /**
+   * ENDPOINT CRUD - Crear nueva solicitud
+   */
   @Post('/add')
   async create(@Body() dto: CreateSolicitudBecaDto) {
     this.logger.log('Creando Solicitud de Beca: ' + JSON.stringify(dto));
+    
+    // Validación básica
+    if (!dto.EstudianteId || dto.EstudianteId <= 0) {
+      throw new BadRequestException('ID de estudiante inválido');
+    }
+    
+    if (!dto.TipoBecaId || dto.TipoBecaId <= 0) {
+      throw new BadRequestException('ID de tipo de beca inválido');
+    }
+    
+    if (!dto.PeriodoAcademicoId || dto.PeriodoAcademicoId <= 0) {
+      throw new BadRequestException('ID de período académico inválido');
+    }
+    
     return await this.solicitudBecaService.create(dto);
   }
 
+  /**
+   * ENDPOINT CRUD - Actualizar solicitud existente
+   */
   @Put(':id')
   async update(@Param('id') id: string, @Body() dto: CreateSolicitudBecaDto) {
     this.logger.log(`Actualizando Solicitud de Beca ID: ${id} con datos: ${JSON.stringify(dto)}`);
+    
     const idNum = parseInt(id, 10);
     if (isNaN(idNum) || idNum <= 0) {
-      return { error: 'ID inválido' };
+      throw new BadRequestException('ID inválido');
     }
+    
     return await this.solicitudBecaService.update(idNum, dto);
   }
 
+  /**
+   * ENDPOINT CRUD - Eliminar solicitud por ID
+   */
   @Delete(':id')
   async remove(@Param('id') id: string) {
     this.logger.log('Eliminando Solicitud de Beca ID: ' + id);
+    
     const idNum = parseInt(id, 10);
     if (isNaN(idNum) || idNum <= 0) {
-      return { error: 'ID inválido' };
+      throw new BadRequestException('ID inválido');
     }
+    
     return await this.solicitudBecaService.remove(idNum);
   }
 }

@@ -64,4 +64,9 @@ export class CreateTipoBecaDto {
   @IsDateString({}, { message: 'La fecha de modificación debe ser válida.' })
   @ApiProperty({ description: 'Fecha de modificación', example: '2023-10-27', required: false })
   FechaModificacion?: string;
+
+  @IsOptional()
+  @IsDateString({}, { message: 'La fecha límite debe ser válida.' })
+  @ApiProperty({ description: 'Fecha límite de la beca', example: '2025-08-30', required: false })
+  FechaLimite?: string;
 }

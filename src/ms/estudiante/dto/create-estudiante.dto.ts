@@ -30,15 +30,15 @@ export class CreateEstudianteDto {
   @ApiProperty({ description: 'Correo electrónico del estudiante', example: 'juan.perez@example.com' })
   Correo: string;
 
-  @IsNotEmpty({ message: 'El ID del estado no puede estar vacío.' })
+  @IsOptional()  // Hacer opcional
   @IsNumber({}, { message: 'El ID del estado debe ser un número.' })
-  @ApiProperty({ description: 'ID del estado del estudiante', example: 1 })
-  EstadoId: number;
+  @ApiProperty({ description: 'ID del estado del estudiante', example: 1, required: false })
+  EstadoId?: number;
 
-  @IsNotEmpty({ message: 'El ID de la carrera no puede estar vacío.' })
+  @IsOptional()  // Hacer opcional
   @IsNumber({}, { message: 'El ID de la carrera debe ser un número.' })
-  @ApiProperty({ description: 'ID de la carrera del estudiante', example: 1 })
-  CarreraId: number;
+  @ApiProperty({ description: 'ID de la carrera del estudiante', example: 1, required: false })
+  CarreraId?: number;
 
   @IsOptional()
   @IsIn(['estudiante', 'admin'], { message: 'El rol debe ser "estudiante" o "admin".' })

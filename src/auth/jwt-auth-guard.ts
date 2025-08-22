@@ -14,28 +14,41 @@ export class JwtAuthGuard implements CanActivate {
     const request = context.switchToHttp().getRequest<Request>();
     const authHeader = request.headers['authorization'];
     
-    if (!authHeader) throw new UnauthorizedException('No se encontró el token de autorización');
+    console.log('Authorization header:', authHeader); // Log para depuración
+    if (!authHeader) {
+      console.error('No authorization header provided');
+      throw new UnauthorizedException('No se encontró el token de autorización');
+    }
 
     const [bearer, token] = authHeader.split(' ');
-    if (bearer !== 'Bearer' || !token) throw new UnauthorizedException('Formato de token inválido');
+    console.log('Extracted token:', token); // Log para depuración
+    if (bearer !== 'Bearer' || !token) {
+      console.error('Invalid token format');
+      throw new UnauthorizedException('Formato de token inválido');
+    }
 
     try {
-      const payload = this.jwtService.verify(token, {
+      const payload = await this.jwtService.verifyAsync(token, {
         secret: process.env.JWT_SECRET || 'default_secret',
       });
+      console.log('Token payload:', payload); // Log para depuración
       
-      // ✅ Asegurarse de que el payload tiene un ID válido
       if (!payload.sub || payload.sub <= 0) {
+        console.error('Invalid user ID in token:', payload.sub);
         throw new UnauthorizedException('Token inválido: ID de usuario no válido');
       }
       
       const user = await this.authService.validateUserById(payload.sub);
-      if (!user) throw new UnauthorizedException('Usuario no encontrado');
+      if (!user) {
+        console.error('User not found for ID:', payload.sub);
+        throw new UnauthorizedException('Usuario no encontrado');
+      }
 
-      // ✅ Añadir información completa del usuario a la request
       request['user'] = user;
+      console.log('User validated:', user); // Log para depuración
       return true;
     } catch (error) {
+      console.error('Token verification failed:', error.message);
       throw new UnauthorizedException('Token inválido o expirado');
     }
   }
