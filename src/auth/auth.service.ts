@@ -20,7 +20,7 @@ export class AuthService {
       sub: user.Id, 
       role: user.Role || 'estudiante', 
       nombre: user.Nombre,
-      email: user.Correo // ✅ CAMBIADO: Email -> Correo
+      email: user.Correo
     };
     const token = this.jwtService.sign(payload);
 
@@ -30,7 +30,7 @@ export class AuthService {
         id: user.Id, 
         nombre: user.Nombre, 
         role: user.Role || 'estudiante',
-        email: user.Correo // ✅ CAMBIADO: Email -> Correo
+        email: user.Correo
       },
     };
   }
@@ -39,10 +39,10 @@ export class AuthService {
     Nombre: string;
     Apellidos: string;
     Correo: string;
-    Contrasena: string;
+    Edad: number; // ✅ Necesario para la contraseña automática
     Role?: string;
   }) {
-    const { Nombre, Apellidos, Correo, Contrasena, Role = 'estudiante' } = data;
+    const { Nombre, Apellidos, Correo, Edad, Role = 'estudiante' } = data;
 
     // Verificar si el correo ya existe
     const existingUser = await this.usuarioService.findOneByEmail(Correo);
@@ -50,8 +50,11 @@ export class AuthService {
       throw new ConflictException('El correo ya está registrado');
     }
 
+    // Generar contraseña automática simple: 3 letras de nombre + 3 letras de apellido + edad
+    const plainPassword = `${Nombre.substring(0,3).toLowerCase()}${Apellidos.substring(0,3).toLowerCase()}${Edad}`;
+
     // Hashear la contraseña
-    const hashedPassword = await this.usuarioService.hashPassword(Contrasena);
+    const hashedPassword = await this.usuarioService.hashPassword(plainPassword);
 
     // Crear el usuario
     const newUser = await this.usuarioService.create({
@@ -67,17 +70,19 @@ export class AuthService {
       sub: newUser.Id, 
       role: newUser.Role, 
       nombre: newUser.Nombre,
-      email: newUser.Correo // ✅ CAMBIADO: Email -> Correo
+      email: newUser.Correo
     };
     const token = this.jwtService.sign(payload);
 
+    // Retornar también la contraseña generada
     return {
       access_token: token,
+      passwordGenerada: plainPassword, // ✅ Contraseña que puede enviarse al usuario
       user: { 
         id: newUser.Id, 
         nombre: newUser.Nombre, 
         role: newUser.Role,
-        email: newUser.Correo // ✅ CAMBIADO: Email -> Correo
+        email: newUser.Correo
       },
     };
   }
@@ -107,7 +112,7 @@ export class AuthService {
       id: user.Id, 
       nombre: user.Nombre, 
       role: user.Role, 
-      email: user.Correo // ✅ CAMBIADO: Email -> Correo
+      email: user.Correo
     } : null;
   }
 }

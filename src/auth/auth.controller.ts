@@ -21,7 +21,7 @@ export class AuthController {
       Nombre: string;
       Apellidos: string;
       Correo: string;
-      Contrasena: string;
+      Edad: number;       // 🔹 Obligatorio para generar contraseña automática
       Role?: string;
     }
   ) {
