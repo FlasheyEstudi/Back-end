@@ -10,7 +10,8 @@ import {
   Logger,
   UseGuards,
   BadRequestException,
-  NotFoundException
+  NotFoundException,
+  Query
 } from '@nestjs/common';
 import { SolicitudBecaService } from './SolicitudBeca.service';
 import { CreateSolicitudBecaDto } from './dto/create-SolicitudBeca.dto';
@@ -46,6 +47,24 @@ export class SolicitudBecaController {
   async debugConnection() {
     this.logger.log('=== SOLICITUD: debugConnection ===');
     return await this.solicitudBecaService.debugDatabaseConnection();
+  }
+
+  /**
+   * ENDPOINT PARA MAPEO - Mapear UserId a EstudianteId
+   */
+  @Get('map-user-to-estudiante')
+  async mapUserToEstudiante(@Query('userId') userId: number) {
+    this.logger.log(`=== SOLICITUD: mapUserToEstudiante userId=${userId} ===`);
+    if (!userId || isNaN(userId) || userId <= 0) {
+      throw new BadRequestException('userId inválido');
+    }
+    try {
+      const estudianteId = await this.solicitudBecaService.mapUserToEstudiante(userId);
+      return { estudianteId };
+    } catch (error) {
+      this.logger.error('=== ERROR: mapUserToEstudiante falló ===', error);
+      throw new NotFoundException('No se encontró un estudiante asociado al usuario.');
+    }
   }
 
   /**
@@ -134,4 +153,21 @@ export class SolicitudBecaController {
     
     return await this.solicitudBecaService.remove(idNum);
   }
-}
+  @Get('estudiante/:estudianteId')
+async getSolicitudesPorEstudiante(@Param('estudianteId') estudianteId: string) {
+  this.logger.log(`Obteniendo solicitudes para estudiante ID: ${estudianteId}`);
+  
+  const idNum = parseInt(estudianteId, 10);
+  if (isNaN(idNum) || idNum <= 0) {
+    throw new BadRequestException('ID de estudiante inválido');
+  }
+  
+  try {
+    const solicitudes = await this.solicitudBecaService.findByEstudianteId(idNum);
+    return solicitudes;
+  } catch (error) {
+    this.logger.error(`Error al obtener solicitudes para estudiante ${idNum}:`, error);
+    throw new NotFoundException(`No se encontraron solicitudes para el estudiante con ID ${idNum}`);
+  }
+
+}}

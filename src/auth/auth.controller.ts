@@ -5,7 +5,7 @@ import { User } from '../common/decorators/user.decorator';
 
 @Controller('auth')
 export class AuthController {
-  constructor(private readonly authService: AuthService) {}
+  constructor(private readonly authService: AuthService) { }
 
   // 🔑 Login
   @Post('login')

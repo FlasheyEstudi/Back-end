@@ -30,12 +30,12 @@ export class CreateEstudianteDto {
   @ApiProperty({ description: 'Correo electrónico del estudiante', example: 'juan.perez@example.com' })
   Correo: string;
 
-  @IsOptional()  // Hacer opcional
+  @IsOptional()
   @IsNumber({}, { message: 'El ID del estado debe ser un número.' })
   @ApiProperty({ description: 'ID del estado del estudiante', example: 1, required: false })
   EstadoId?: number;
 
-  @IsOptional()  // Hacer opcional
+  @IsOptional()
   @IsNumber({}, { message: 'El ID de la carrera debe ser un número.' })
   @ApiProperty({ description: 'ID de la carrera del estudiante', example: 1, required: false })
   CarreraId?: number;
