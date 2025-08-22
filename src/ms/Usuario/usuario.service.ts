@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException, ConflictException } from '@nestjs/common';
 import { SqlService } from '../cnxjs/sql.service';
 import { CreateUsuarioDto } from './dto/create-usuario.dto';
 import * as bcrypt from 'bcrypt';
@@ -25,8 +25,8 @@ export class UsuarioService {
       
       return result.recordset.length > 0 ? result.recordset[0] : null;
     } catch (error) {
-      console.error('Error buscando usuario:', error);
-      return null;
+      console.error('Error buscando usuario por nombre o email:', error);
+      throw new BadRequestException('Error al buscar usuario');
     }
   }
 
@@ -39,7 +39,15 @@ export class UsuarioService {
       const result = await request.execute('Beca.sp_Get_Usuario');
       
       if (result.recordset.length > 0) {
-        return result.recordset[0];
+        const user = result.recordset[0];
+        return {
+          Id: user.Id,
+          Nombre: user.Nombre,
+          Apellidos: user.Apellidos,
+          Correo: user.Email,
+          Role: user.Role,
+          Contrasena: user.Contrasena, // Ya está hasheada
+        };
       }
       throw new NotFoundException(`Usuario con ID ${id} no encontrado`);
     } catch (error) {
@@ -56,13 +64,40 @@ export class UsuarioService {
       request.input('Id', 0);
       const result = await request.execute('Beca.sp_Get_Usuario');
 
-      return result.recordset;
+      return result.recordset.map(user => ({
+        Id: user.Id,
+        Nombre: user.Nombre,
+        Apellidos: user.Apellidos,
+        Correo: user.Email,
+        Role: user.Role,
+      }));
     } catch (error) {
       console.error('Error al obtener usuarios:', error);
       throw new BadRequestException(`Error al obtener usuarios: ${error.message}`);
     }
   }
 
+  // ✅ NUEVO: Buscar por correo (usa el SP existente)
+  async findOneByEmail(email: string) {
+    try {
+      if (!email || typeof email !== 'string') {
+        return null;
+      }
+
+      const pool = await this.sqlService.getConnection();
+      const request = pool.request();
+      
+      request.input('Nombre', email); // Usa el SP existente
+      const result = await request.execute('Beca.sp_Get_Usuario_By_Identifier');
+      
+      return result.recordset.length > 0 ? result.recordset[0] : null;
+    } catch (error) {
+      console.error('Error buscando usuario por email:', error);
+      throw new BadRequestException('Error al buscar usuario por correo');
+    }
+  }
+
+  // ✅ CORREGIDO: create() ahora devuelve el usuario completo
   async create(userData: CreateUsuarioDto) {
     try {
       if (!userData.Contrasena) {
@@ -72,7 +107,7 @@ export class UsuarioService {
       const pool = await this.sqlService.getConnection();
       const request = pool.request();
 
-      // ✅ Usa el nuevo método
+      // ✅ Hashear la contraseña
       const hashedPassword = await this.hashPassword(userData.Contrasena);
 
       const id = userData.Id ?? 0;
@@ -86,15 +121,25 @@ export class UsuarioService {
 
       const result = await request.execute('Beca.sp_Save_Usuario');
 
+      let newId: number;
+
       if (result.recordset && result.recordset.length > 0) {
-        return {
-          id: result.recordset[0].NewId ?? result.recordset[0].UpdatedId ?? id,
-        };
+        newId = result.recordset[0].NewId || result.recordset[0].UpdatedId || id;
+      } else {
+        throw new BadRequestException('No se pudo obtener el ID del usuario creado');
       }
 
-      return { id };
+      // ✅ Retornar el usuario completo usando findOne
+      return await this.findOne(newId);
+
     } catch (error) {
       console.error('Error creando usuario:', error);
+
+      // Si el SP ya lanza error por email duplicado, lo capturamos
+      if (error.message?.includes('correo electrónico ya está registrado')) {
+        throw new ConflictException('El correo ya está registrado');
+      }
+
       throw error;
     }
   }
@@ -104,7 +149,6 @@ export class UsuarioService {
       const pool = await this.sqlService.getConnection();
       const request = pool.request();
       
-      // ✅ Usa el nuevo método
       const hashedPassword = await this.hashPassword(newPassword);
 
       request.input('Id', userId);

@@ -13,6 +13,20 @@ export class AuthController {
     return this.authService.login(identifier, password);
   }
 
+  // ✅ NUEVO: Endpoint de registro
+  @Post('register')
+  async register(
+    @Body() body: {
+      Nombre: string;
+      Apellidos: string;
+      Correo: string;
+      Contrasena: string;
+      Role?: string;
+    }
+  ) {
+    return this.authService.register(body);
+  }
+
   @Post('change-password')
   @UseGuards(JwtAuthGuard)
   async changePassword(

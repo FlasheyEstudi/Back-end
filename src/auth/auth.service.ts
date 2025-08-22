@@ -1,4 +1,4 @@
-import { Injectable, UnauthorizedException, NotFoundException } from '@nestjs/common';
+import { Injectable, UnauthorizedException, NotFoundException, ConflictException } from '@nestjs/common';
 import { UsuarioService } from '../ms/Usuario/usuario.service';
 import { JwtService } from '@nestjs/jwt';
 
@@ -19,9 +19,47 @@ export class AuthService {
     const payload = { sub: user.Id, role: user.Role || 'estudiante', nombre: user.Nombre };
     const token = this.jwtService.sign(payload);
 
-    return { 
-      access_token: token, 
-      user: { Id: user.Id, nombre: user.Nombre, role: user.Role || 'estudiante' } 
+    return {
+      access_token: token,
+      user: { id: user.Id, nombre: user.Nombre, role: user.Role || 'estudiante' },
+    };
+  }
+
+  // ✅ NUEVO: Registro de usuario
+  async register(data: {
+    Nombre: string;
+    Apellidos: string;
+    Correo: string;
+    Contrasena: string;
+    Role?: string;
+  }) {
+    const { Nombre, Apellidos, Correo, Contrasena, Role = 'estudiante' } = data;
+
+    // Verificar si el correo ya existe
+    const existingUser = await this.usuarioService.findOneByEmail(Correo);
+    if (existingUser) {
+      throw new ConflictException('El correo ya está registrado');
+    }
+
+    // Hashear la contraseña
+    const hashedPassword = await this.usuarioService.hashPassword(Contrasena);
+
+    // Crear el usuario
+    const newUser = await this.usuarioService.create({
+      Nombre,
+      Apellidos,
+      Correo,
+      Contrasena: hashedPassword,
+      Role,
+    });
+
+    // Generar token de autenticación
+    const payload = { sub: newUser.Id, role: newUser.Role, nombre: newUser.Nombre };
+    const token = this.jwtService.sign(payload);
+
+    return {
+      access_token: token,
+      user: { id: newUser.Id, nombre: newUser.Nombre, role: newUser.Role },
     };
   }
 
@@ -41,6 +79,6 @@ export class AuthService {
   async validateUserById(userId: number) {
     if (!userId) return null;
     const user = await this.usuarioService.findOne(userId);
-    return user || null;
+    return user ? { id: user.Id, nombre: user.Nombre, role: user.Role } : null;
   }
 }
