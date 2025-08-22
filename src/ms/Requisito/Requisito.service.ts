@@ -8,127 +8,150 @@ export class RequisitoService {
 
   constructor(private readonly sqlService: SqlService) {}
 
-  // 🔁 Función reutilizable para obtener un nombre desde un SP por ID
-  private async getNombreById(spName: string, id: number | null): Promise<string | null> {
-    if (id === null || id === undefined || id <= 0) return null;
+  /**
+   * Obtiene el nombre de una entidad (Estudiante, Estado, etc.) por su ID.
+   */
+  private async getNombreById(spName: string, id: number): Promise<string | null> {
+    if (!id || id <= 0) return null;
+
     try {
       const pool = await this.sqlService.getConnection();
-      const request = pool.request();
-      request.input('Id', id);
-      const result = await request.execute(spName);
-      // Asume que el SP devuelve un campo 'Nombre' o 'Nombre' y 'Apellido'
-      return result.recordset?.[0]?.Nombre
-        ? `${result.recordset[0].Nombre} ${result.recordset[0].Apellido || ''}`.trim()
-        : null;
-    } catch (error: any) {
-      this.logger.error(`Error obteniendo nombre desde ${spName} para ID ${id}: ${error.message}`, error.stack);
+      const result = await pool.request().input('Id', id).execute(spName);
+
+      if (result.recordset.length === 0) return null;
+
+      const record = result.recordset[0];
+      if (record.Nombre !== undefined) {
+        // Si tiene Apellido (como Estudiante)
+        if (record.Apellido !== undefined) {
+          return `${record.Nombre} ${record.Apellido || ''}`.trim();
+        }
+        return record.Nombre;
+      }
+      return null;
+    } catch (error) {
+      this.logger.warn(`Error obteniendo nombre desde ${spName} para ID ${id}: ${error.message}`);
       return null;
     }
   }
 
-  // Este método maneja tanto la creación (INSERT) como la actualización (UPDATE)
+  /**
+   * Crea o actualiza un requisito.
+   */
   async create(dto: CreateRequisitoDto) {
     try {
       const pool = await this.sqlService.getConnection();
       const request = pool.request();
 
+      // Determinar si es UPDATE o INSERT
       const isUpdate = dto.Id && dto.Id > 0;
-      const requisitoIdForSp = isUpdate ? dto.Id : 0; // Si es update, usa el ID; si es insert, usa 0 o un valor que el SP interprete como nuevo
+      const spId = isUpdate ? dto.Id : 0; // SP usa 0 para INSERT
 
-      request.input('Id', requisitoIdForSp); // Parámetro para el SP
+      request.input('Id', spId);
       request.input('Descripcion', dto.Descripcion);
-      request.input('EstudianteId', dto.EstudianteId);
-      request.input('EstadoId', dto.EstadoId);
-      
-      // Manejar fechas, si vienen, usarlas; si no, dejar que el SP use sus valores por defecto o NULL
-      if (dto.FechaRegistro) {
-        request.input('FechaRegistro', dto.FechaRegistro);
-      } else {
-        request.input('FechaRegistro', null); // Asegurarse de que el input se setee a NULL si no viene
-      }
-      if (dto.FechaModificacion) {
-        request.input('FechaModificacion', dto.FechaModificacion);
-      } else {
-        request.input('FechaModificacion', null);
+      request.input('EstudianteId', dto.EstudianteId || null);
+      request.input('EstadoId', dto.EstadoId || null);
+      request.input('FechaRegistro', dto.FechaRegistro || null);
+      request.input('FechaModificacion', dto.FechaModificacion || null);
+
+      const result: any = await request.execute('Beca.sp_Save_Requisito');
+      const newId = result.recordset?.[0]?.NewId ?? result.recordset?.[0]?.UpdatedId ?? spId;
+
+      if (!newId) {
+        throw new Error('No se obtuvo un ID válido del procedimiento almacenado.');
       }
 
-
-      const result: any = await request.execute('Beca.sp_Save_Requisito'); // Asumiendo que este SP maneja INSERT/UPDATE
-
-      const newId = result.recordset?.[0]?.NewId || result.recordset?.[0]?.UpdatedId || requisitoIdForSp;
-
-      if (!newId && !isUpdate) { // Si es una creación y no se obtuvo un ID
-          throw new Error('El procedimiento almacenado no devolvió un NewId válido al crear el requisito.');
-      }
-
-      // Obtener nombres relacionados para la respuesta
+      // Obtener nombres relacionados
       const estudianteNombre = await this.getNombreById('Beca.sp_Get_Estudiante', dto.EstudianteId);
       const estadoNombre = await this.getNombreById('Beca.sp_Get_Estado', dto.EstadoId);
 
-      const responseRequisito = {
+      const response = {
         Id: newId,
         Descripcion: dto.Descripcion,
         EstudianteId: dto.EstudianteId,
         Estudiantenombre: estudianteNombre,
         EstadoId: dto.EstadoId,
         Estadonombre: estadoNombre,
-        FechaRegistro: dto.FechaRegistro || null, // Incluir fechas en la respuesta
+        FechaRegistro: dto.FechaRegistro || null,
         FechaModificacion: dto.FechaModificacion || null,
       };
 
-      this.logger.log(`Requisito guardado/actualizado ID ${newId}: ${dto.Descripcion}`);
-      return responseRequisito;
+      this.logger.log(`Requisito ${isUpdate ? 'actualizado' : 'creado'}: ID ${newId}`);
+      return response;
 
-    } catch (error: any) {
+    } catch (error) {
       this.logger.error(`Error al guardar requisito: ${error.message}`, error.stack);
-      if (error instanceof HttpException) throw error; // Re-lanza si ya es una HttpException
       throw new HttpException(
         {
           status: HttpStatus.BAD_REQUEST,
-          detalle: 'Error al guardar el requisito. Verifique los IDs de Estudiante y Estado.',
+          detalle: 'Error al guardar el requisito. Verifique los datos enviados.',
           technical: error.message,
-          sqlError: error.originalError?.info?.message || null
+          sqlError: error.originalError?.info?.message || null,
         },
         HttpStatus.BAD_REQUEST,
       );
     }
   }
 
-  // Método explícito para actualización (llamado por el controlador PUT)
+  /**
+   * Actualiza un requisito por ID.
+   */
   async update(id: number, dto: CreateRequisitoDto) {
-    dto.Id = id; // Asegura que el ID del parámetro se usa para la actualización
-    return this.create(dto); // Reutiliza el método 'create' que ya tiene la lógica de UPDATE
+    if (!id || id <= 0) {
+      throw new HttpException('ID inválido para actualización.', HttpStatus.BAD_REQUEST);
+    }
+
+    dto.Id = id;
+    return this.create(dto);
   }
 
+  /**
+   * Obtiene todos los requisitos (sin filtros).
+   */
   async findAll() {
     try {
       const pool = await this.sqlService.getConnection();
-      const requisitoResult: any = await pool.request().input('Id', 0).execute('Beca.sp_Get_Requisito');
-      const requisitos = requisitoResult.recordset;
 
-      // Optimización: Obtener todos los estudiantes y estados una vez
-      const [estudiantesAll, estadosAll] = await Promise.all([
-        pool.request().input('Id', 0).execute('Beca.sp_Get_Estudiante').then(res => res.recordset),
-        pool.request().input('Id', 0).execute('Beca.sp_Get_Estado').then(res => res.recordset),
+      // Obtener todos los requisitos
+      const { recordset: requisitos } = await pool
+        .request()
+        .execute('Beca.sp_Get_All_Requisitos');
+
+      if (requisitos.length === 0) {
+        return [];
+      }
+
+      // Obtener todos los estudiantes y estados
+      const [estudiantesResult, estadosResult] = await Promise.all([
+        pool.request().execute('Beca.sp_Get_All_Estudiantes'),
+        pool.request().execute('Beca.sp_Get_All_Estado'),
       ]);
 
-      const requisitosConNombres = requisitos.map(req => {
-        const estudiante = estudiantesAll.find(e => e.Id === req.EstudianteId);
-        const estado = estadosAll.find(s => s.Id === req.EstadoId);
+      // Crear mapas para búsqueda rápida
+      const estudiantesMap = new Map(
+        estudiantesResult.recordset.map(e => [
+          e.Id,
+          `${e.Nombre} ${e.Apellido || ''}`.trim(),
+        ]),
+      );
 
-        return {
-          ...req,
-          Estudiantenombre: estudiante ? `${estudiante.Nombre} ${estudiante.Apellido || ''}`.trim() : null,
-          Estadonombre: estado?.Nombre ?? null,
-        };
-      });
-      return requisitosConNombres;
-    } catch (error: any) {
+      const estadosMap = new Map(
+        estadosResult.recordset.map(s => [s.Id, s.Nombre]),
+      );
+
+      // Enriquecer los requisitos con nombres
+      return requisitos.map(req => ({
+        ...req,
+        Estudiantenombre: req.EstudianteId ? estudiantesMap.get(req.EstudianteId) || null : null,
+        Estadonombre: req.EstadoId ? estadosMap.get(req.EstadoId) || null : null,
+      }));
+
+    } catch (error) {
       this.logger.error(`Error al obtener todos los requisitos: ${error.message}`, error.stack);
       throw new HttpException(
         {
           status: HttpStatus.INTERNAL_SERVER_ERROR,
-          detalle: 'Error al obtener los requisitos',
+          detalle: 'Error al obtener la lista de requisitos.',
           technical: error.message,
         },
         HttpStatus.INTERNAL_SERVER_ERROR,
@@ -136,34 +159,44 @@ export class RequisitoService {
     }
   }
 
+  /**
+   * Obtiene un requisito por ID.
+   */
   async findOne(id: number) {
+    if (!id || id <= 0) {
+      throw new HttpException('ID inválido.', HttpStatus.BAD_REQUEST);
+    }
+
     try {
       const pool = await this.sqlService.getConnection();
-      const requisitoResult: any = await pool.request().input('Id', id).execute('Beca.sp_Get_Requisito');
+      const { recordset } = await pool
+        .request()
+        .input('Id', id)
+        .execute('Beca.sp_Get_Requisito');
 
-      if (requisitoResult.recordset.length === 0) {
-        throw new HttpException(`Requisito con ID ${id} no encontrado`, HttpStatus.NOT_FOUND);
+      if (recordset.length === 0) {
+        throw new HttpException(`Requisito con ID ${id} no encontrado.`, HttpStatus.NOT_FOUND);
       }
 
-      const requisito = requisitoResult.recordset[0];
+      const req = recordset[0];
 
-      const [estudianteNombre, estadoNombre] = await Promise.all([
-        this.getNombreById('Beca.sp_Get_Estudiante', requisito.EstudianteId),
-        this.getNombreById('Beca.sp_Get_Estado', requisito.EstadoId),
-      ]);
+      // Obtener nombres relacionados
+      const estudianteNombre = await this.getNombreById('Beca.sp_Get_Estudiante', req.EstudianteId);
+      const estadoNombre = await this.getNombreById('Beca.sp_Get_Estado', req.EstadoId);
 
       return {
-        ...requisito,
+        ...req,
         Estudiantenombre: estudianteNombre,
         Estadonombre: estadoNombre,
       };
-    } catch (error: any) {
-      this.logger.error(`Error al buscar requisito por ID ${id}: ${error.message}`, error.stack);
+
+    } catch (error) {
+      this.logger.error(`Error al buscar requisito ID ${id}: ${error.message}`, error.stack);
       if (error instanceof HttpException) throw error;
       throw new HttpException(
         {
           status: HttpStatus.INTERNAL_SERVER_ERROR,
-          detalle: `Error al buscar el requisito con ID ${id}`,
+          detalle: `Error al buscar el requisito con ID ${id}.`,
           technical: error.message,
         },
         HttpStatus.INTERNAL_SERVER_ERROR,
@@ -171,22 +204,34 @@ export class RequisitoService {
     }
   }
 
+  /**
+   * Elimina un requisito por ID.
+   */
   async remove(id: number) {
+    if (!id || id <= 0) {
+      throw new HttpException('ID inválido para eliminación.', HttpStatus.BAD_REQUEST);
+    }
+
     try {
       const pool = await this.sqlService.getConnection();
-      const result = await pool.request().input('Id', id).execute('Beca.sp_Delete_Requisito');
+      const result = await pool
+        .request()
+        .input('Id', id)
+        .execute('Beca.sp_Delete_Requisito');
 
       if (result.rowsAffected[0] === 0) {
-        throw new HttpException(`Requisito con ID ${id} no encontrado o no se pudo eliminar.`, HttpStatus.NOT_FOUND);
+        throw new HttpException(`Requisito con ID ${id} no encontrado o ya eliminado.`, HttpStatus.NOT_FOUND);
       }
-      return { mensaje: `Requisito con ID ${id} eliminado correctamente` };
-    } catch (error: any) {
+
+      return { mensaje: `Requisito con ID ${id} eliminado correctamente.` };
+
+    } catch (error) {
       this.logger.error(`Error al eliminar requisito ID ${id}: ${error.message}`, error.stack);
       if (error instanceof HttpException) throw error;
       throw new HttpException(
         {
           status: HttpStatus.INTERNAL_SERVER_ERROR,
-          detalle: 'Error al eliminar el requisito',
+          detalle: 'Error al intentar eliminar el requisito.',
           technical: error.message,
         },
         HttpStatus.INTERNAL_SERVER_ERROR,
