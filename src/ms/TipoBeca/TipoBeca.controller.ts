@@ -148,13 +148,13 @@ export class TipoBecaController {
     }
   }
 
-  // ✅ NUEVO: Endpoint público para estudiantes - obtener tipos de beca activos
+  // ✅ CORREGIDO: Endpoint público para estudiantes - obtener tipos de beca activos
   @Get('public/disponibles')
   async getTiposBecaDisponibles() {
     try {
       const todosLosTipos = await this.tipoBecaService.findAll();
-      // Filtrar solo tipos de beca activos (asumiendo que EstadoId = 1 es activo)
-      const tiposActivos = todosLosTipos.filter(tipo => tipo.EstadoId === 1);
+      // ✅ Filtrar solo tipos de beca activos (EstadoId = 4 es 'Activo')
+      const tiposActivos = todosLosTipos.filter(tipo => tipo.EstadoId === 4);
       return tiposActivos;
     } catch (error) {
       this.logger.error(`Error al obtener tipos de beca disponibles: ${error.message}`, error.stack);

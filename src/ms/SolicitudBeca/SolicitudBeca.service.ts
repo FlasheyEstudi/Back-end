@@ -3,30 +3,46 @@ import { Injectable, Logger } from '@nestjs/common';
 import { SqlService } from '../../ms/cnxjs/sql.service';
 import { CreateSolicitudBecaDto } from './dto/create-SolicitudBeca.dto';
 
+// Interfaz para asegurar que el backend devuelva datos compatibles con el frontend
+export interface SolicitudBecaDetalle {
+  Id: number;
+  EstudianteId: number;
+  TipoBecaId: number;
+  EstadoId: number;
+  FechaSolicitud: string;
+  PeriodoAcademicoId: number;
+  Observaciones?: string;
+  Fecha_resultado?: string;
+  EstudianteNombre: string;
+  EstudianteApellido: string;
+  TipoBecaNombre: string;
+  EstadoNombre: string;
+  PeriodoAcademicoNombre: string;
+  PeriodoAnioAcademico: string;
+}
+
 @Injectable()
 export class SolicitudBecaService {
   private readonly logger = new Logger(SolicitudBecaService.name);
 
   constructor(private readonly sqlService: SqlService) {}
-  
+
   async getConnection() {
     return await this.sqlService.getConnection();
   }
 
-  // ✅ Nuevo método para mapear UserId a EstudianteId
   async mapUserToEstudiante(userId: number): Promise<number> {
     try {
       this.logger.log(`Mapeando UserId ${userId} a EstudianteId`);
       const pool = await this.getConnection();
       const request = pool.request();
       request.input('UserId', userId);
-      
       const result = await request.execute('Beca.sp_Map_UserToEstudiante');
-      
+
       if (result.recordset.length === 0) {
         throw new Error(`No se encontró estudiante asociado al usuario ID ${userId}`);
       }
-      
+
       const estudianteId = result.recordset[0].EstudianteId;
       this.logger.log(`Mapeo exitoso: UserId ${userId} -> EstudianteId ${estudianteId}`);
       return estudianteId;
@@ -36,78 +52,107 @@ export class SolicitudBecaService {
     }
   }
 
-  /**
-   * ✅ Nuevo método: Obtiene solicitudes de beca por EstudianteId
-   */
-  async findByEstudianteId(estudianteId: number): Promise<any[]> {
+  async findByEstudianteId(userId: number): Promise<SolicitudBecaDetalle[]> {
     try {
-      this.logger.log(`Buscando solicitudes para estudiante ID: ${estudianteId}`);
+      this.logger.log(`Buscando solicitudes para Usuario ID (a mapear): ${userId}`);
       const pool = await this.getConnection();
-      
+
+      // Mapear Usuario.Id a Estudiante.Id
+      let estudianteId: number;
+      try {
+        this.logger.log(`Mapeando UserId ${userId} a EstudianteId...`);
+        const mapRequest = pool.request();
+        mapRequest.input('UserId', userId);
+        const mapResult = await mapRequest.execute('Beca.sp_Map_UserToEstudiante');
+
+        if (mapResult.recordset && mapResult.recordset.length > 0) {
+          estudianteId = mapResult.recordset[0].EstudianteId;
+          this.logger.log(`Mapeo exitoso: Usuario.Id ${userId} -> Estudiante.Id ${estudianteId}`);
+        } else {
+          const errorMsg = `sp_Map_UserToEstudiante no devolvió un EstudianteId para Usuario.Id ${userId}`;
+          this.logger.error(errorMsg);
+          throw new Error(errorMsg);
+        }
+      } catch (mapError: any) {
+        this.logger.error(`Error en mapeo UserId->EstudianteId: ${mapError.message}`, mapError.stack);
+        throw new Error(`No se pudo obtener el ID del estudiante asociado al usuario. Detalle: ${mapError.message}`);
+      }
+
       // Validar que el estudiante exista
+      this.logger.log(`Verificando existencia del Estudiante.Id ${estudianteId}...`);
       const estudianteExists = await pool.request()
         .input('Id', estudianteId)
         .execute('Beca.sp_Get_Estudiante');
-        
+
       if (estudianteExists.recordset.length === 0) {
-        throw new Error(`Estudiante con ID ${estudianteId} no encontrado`);
+        const errorMsg = `Estudiante con ID ${estudianteId} no encontrado después del mapeo.`;
+        this.logger.error(errorMsg);
+        throw new Error(errorMsg);
       }
+      this.logger.log(`Estudiante.Id ${estudianteId} verificado.`);
 
       // Obtener solicitudes del estudiante
+      this.logger.log(`Obteniendo solicitudes para Estudiante.Id ${estudianteId}...`);
       const result = await pool.request()
         .input('EstudianteId', estudianteId)
         .execute('Beca.sp_Get_SolicitudBeca_ByEstudiante');
-        
-      return result.recordset || [];
-    } catch (error) {
-      this.logger.error(`Error al obtener solicitudes para estudiante ${estudianteId}:`, error);
+
+      // Mapear los datos a la interfaz SolicitudBecaDetalle
+      const solicitudes: SolicitudBecaDetalle[] = (result.recordset || []).map(solicitud => ({
+        Id: solicitud.Id,
+        EstudianteId: solicitud.EstudianteId,
+        TipoBecaId: solicitud.TipoBecaId,
+        EstadoId: solicitud.EstadoId,
+        FechaSolicitud: solicitud.FechaSolicitud ? new Date(solicitud.FechaSolicitud).toISOString() : null,
+        PeriodoAcademicoId: solicitud.PeriodoAcademicoId,
+        Observaciones: solicitud.Observaciones || null,
+        Fecha_resultado: solicitud.Fecha_resultado ? new Date(solicitud.Fecha_resultado).toISOString() : null,
+        EstudianteNombre: solicitud.EstudianteNombre || null,
+        EstudianteApellido: solicitud.EstudianteApellido || null,
+        TipoBecaNombre: solicitud.TipoBecaNombre || null,
+        EstadoNombre: solicitud.Estadonombre || solicitud.EstadoNombre || null, // Manejar ambas posibilidades
+        PeriodoAcademicoNombre: solicitud.PeriodoAcademicoNombre || null,
+        PeriodoAnioAcademico: solicitud.PeriodoAnioAcademico || null
+      }));
+
+      this.logger.log(`Solicitudes obtenidas para Estudiante.Id ${estudianteId}: ${solicitudes.length}`);
+      return solicitudes;
+    } catch (error: any) {
+      this.logger.error(`Error al obtener solicitudes para Usuario/Estudiante ID ${userId}:`, error);
       throw error;
     }
   }
 
-  /**
-   * MÉTODO PRINCIPAL - Obtiene todos los datos necesarios para el frontend
-   * Solución definitiva sin validaciones problemáticas
-   */
   async getAllFrontendData() {
     try {
       this.logger.log('=== INICIANDO OBTENCIÓN DE DATOS PARA FRONTEND ===');
-      
-      // Obtener conexión a base de datos
       const pool = await this.getConnection();
-      
-      // ==================== EJECUTAR PROCEDIMIENTOS ALMACENADOS ====================
-      // 1. Obtener todas las solicitudes de beca (con datos de lookup)
+
       this.logger.log('Ejecutando: Beca.sp_Get_SolicitudBeca @Id=0');
       const solicitudBecaResult = await pool.request().input('Id', 0).execute('Beca.sp_Get_SolicitudBeca');
       const solicitudes = solicitudBecaResult.recordset || [];
       this.logger.log(`Solicitudes obtenidas: ${solicitudes.length}`);
 
-      // 2. Obtener todos los estudiantes (procedimiento específico sin parámetros)
       this.logger.log('Ejecutando: Beca.sp_Get_All_Estudiantes');
       const estudianteResult = await pool.request().execute('Beca.sp_Get_All_Estudiantes');
       const estudiantes = estudianteResult.recordset || [];
       this.logger.log(`Estudiantes obtenidos: ${estudiantes.length}`);
 
-      // 3. Obtener todos los tipos de beca (procedimiento específico sin parámetros)
       this.logger.log('Ejecutando: Beca.sp_Get_All_TipoBeca');
       const tipoBecaResult = await pool.request().execute('Beca.sp_Get_All_TipoBeca');
       const tiposBeca = tipoBecaResult.recordset || [];
       this.logger.log(`Tipos de beca obtenidos: ${tiposBeca.length}`);
 
-      // 4. Obtener todos los estados (procedimiento específico sin parámetros)
       this.logger.log('Ejecutando: Beca.sp_Get_All_Estado');
       const estadoResult = await pool.request().execute('Beca.sp_Get_All_Estado');
       const estados = estadoResult.recordset || [];
       this.logger.log(`Estados obtenidos: ${estados.length}`);
 
-      // 5. Obtener todos los periodos académicos (procedimiento específico sin parámetros)
       this.logger.log('Ejecutando: Beca.sp_Get_All_PeriodoAcademico');
       const periodoAcademicoResult = await pool.request().execute('Beca.sp_Get_All_PeriodoAcademico');
       const periodosAcademicos = periodoAcademicoResult.recordset || [];
       this.logger.log(`Periodos académicos obtenidos: ${periodosAcademicos.length}`);
 
-      // ==================== RETORNAR DATOS ESTRUCTURADOS ====================
       this.logger.log('=== DATOS OBTENIDOS EXITOSAMENTE ===');
       return {
         success: true,
@@ -127,7 +172,6 @@ export class SolicitudBecaService {
           periodosAcademicos: periodosAcademicos.length
         }
       };
-
     } catch (error) {
       this.logger.error('=== ERROR CRÍTICO EN getAllFrontendData ===');
       this.logger.error('Error completo:', {
@@ -135,8 +179,6 @@ export class SolicitudBecaService {
         stack: error.stack,
         name: error.name
       });
-      
-      // Retornar estructura segura sin lanzar excepciones
       return {
         success: false,
         timestamp: new Date().toISOString(),
@@ -157,17 +199,11 @@ export class SolicitudBecaService {
     }
   }
 
-  /**
-   * MÉTODO DE DEBUG - Para verificar conectividad y datos básicos
-   */
   async debugDatabaseConnection() {
     try {
       this.logger.log('=== DEBUG: Verificando conexión a base de datos ===');
       const pool = await this.getConnection();
-      
-      // Verificar que podemos ejecutar una consulta simple
       const testResult = await pool.request().query('SELECT COUNT(*) as count FROM DbBecas.Beca.SolicitudBeca');
-      
       return {
         success: true,
         message: 'Conexión a base de datos verificada',
@@ -185,11 +221,7 @@ export class SolicitudBecaService {
     }
   }
 
-  /**
-   * Obtiene una solicitud de beca por ID con manejo de errores robusto
-   */
   async findOne(id: number) {
-    // Validación estricta de entrada - PREVENCIÓN DE NaN
     if (id === undefined || id === null || isNaN(id) || id <= 0 || !Number.isInteger(id)) {
       this.logger.warn(`findOne: ID inválido recibido - ${typeof id} ${id}`);
       throw new Error(`ID inválido para búsqueda: ${id}`);
@@ -199,29 +231,28 @@ export class SolicitudBecaService {
       this.logger.log(`findOne: Buscando solicitud con ID ${id}`);
       const pool = await this.getConnection();
       const result = await pool.request().input('Id', id).execute('Beca.sp_Get_SolicitudBeca');
-      
+
       if (!result.recordset || result.recordset.length === 0) {
         throw new Error(`Solicitud de Beca con ID ${id} no encontrada`);
       }
 
       const solicitud = result.recordset[0];
-      
-      // Procesar y retornar datos con formato consistente
       return {
         Id: solicitud.Id,
         EstudianteId: solicitud.EstudianteId,
         TipoBecaId: solicitud.TipoBecaId,
         EstadoId: solicitud.EstadoId,
-        FechaSolicitud: solicitud.FechaSolicitud ? new Date(solicitud.FechaSolicitud) : null,
+        FechaSolicitud: solicitud.FechaSolicitud ? new Date(solicitud.FechaSolicitud).toISOString() : null,
         PeriodoAcademicoId: solicitud.PeriodoAcademicoId,
         Observaciones: solicitud.Observaciones,
-        Fecha_resultado: solicitud.Fecha_resultado ? new Date(solicitud.Fecha_resultado) : null,
+        Fecha_resultado: solicitud.Fecha_resultado ? new Date(solicitud.Fecha_resultado).toISOString() : null,
         EstudianteNombre: solicitud.EstudianteNombre || null,
         EstudianteApellido: solicitud.EstudianteApellido || null,
         TipoBecaNombre: solicitud.TipoBecaNombre || null,
-        Estadonombre: solicitud.Estadonombre || null,
-        PeriodoAcademicoNombre: solicitud.PeriodoAcademicoNombre ? 
-          `${solicitud.PeriodoAcademicoNombre} (${solicitud.PeriodoAnioAcademico})` : null
+        EstadoNombre: solicitud.Estadonombre || solicitud.EstadoNombre || null,
+        PeriodoAcademicoNombre: solicitud.PeriodoAcademicoNombre
+          ? `${solicitud.PeriodoAcademicoNombre} (${solicitud.PeriodoAnioAcademico})`
+          : null
       };
     } catch (error) {
       this.logger.error(`findOne: Error buscando solicitud ID ${id}:`, {
@@ -232,9 +263,6 @@ export class SolicitudBecaService {
     }
   }
 
-  /**
-   * Obtiene todas las solicitudes de beca
-   */
   async findAll() {
     try {
       this.logger.log('findAll: Obteniendo todas las solicitudes de beca');
@@ -247,66 +275,80 @@ export class SolicitudBecaService {
     }
   }
 
-  /**
-   * Crea o actualiza una solicitud de beca
-   */
   async create(dto: CreateSolicitudBecaDto) {
     try {
-      this.logger.log(`Creando Solicitud de Beca con datos: ${JSON.stringify(dto)}`);
-      
-      // ✅ Validar que el estudiante exista en la tabla Estudiante
+      this.logger.log(`Creando Solicitud de Beca con datos (originales): ${JSON.stringify(dto)}`);
       const pool = await this.sqlService.getConnection();
-      
-      // Verificar que el estudiante exista
-      const estudianteExists = await pool.request()
-        .input('Id', dto.EstudianteId)
-        .execute('Beca.sp_Get_Estudiante');
-        
-      if (estudianteExists.recordset.length === 0) {
-        throw new Error(`Estudiante con ID ${dto.EstudianteId} no encontrado en la tabla Estudiante`);
+
+      let estudianteIdToUse = dto.EstudianteId;
+      try {
+        this.logger.log(`Intentando mapear Usuario.Id ${dto.EstudianteId} a Estudiante.Id...`);
+        const mapRequest = pool.request();
+        mapRequest.input('UserId', dto.EstudianteId);
+        const mapResult = await mapRequest.execute('Beca.sp_Map_UserToEstudiante');
+
+        if (mapResult.recordset && mapResult.recordset.length > 0) {
+          estudianteIdToUse = mapResult.recordset[0].EstudianteId;
+          this.logger.log(`Mapeo exitoso: Usuario.Id ${dto.EstudianteId} -> Estudiante.Id ${estudianteIdToUse}`);
+        } else {
+          const errorMsg = `sp_Map_UserToEstudiante no devolvió un EstudianteId para Usuario.Id ${dto.EstudianteId}`;
+          this.logger.error(errorMsg);
+          throw new Error(errorMsg);
+        }
+      } catch (mapError: any) {
+        this.logger.error(`Error al mapear Usuario.Id ${dto.EstudianteId} a Estudiante.Id:`, mapError);
+        throw new Error(`No se pudo obtener el ID del estudiante asociado al usuario. Detalle: ${mapError.message}`);
       }
 
-      const request = pool.request();
+      this.logger.log(`Verificando existencia del Estudiante.Id ${estudianteIdToUse}...`);
+      const estudianteExists = await pool.request()
+        .input('Id', estudianteIdToUse)
+        .execute('Beca.sp_Get_Estudiante');
 
+      if (estudianteExists.recordset.length === 0) {
+        const errorMsg = `Estudiante con ID ${estudianteIdToUse} no encontrado en la tabla Estudiante.`;
+        this.logger.error(errorMsg);
+        throw new Error(errorMsg);
+      }
+      this.logger.log(`Estudiante.Id ${estudianteIdToUse} verificado correctamente.`);
+
+      const request = pool.request();
       const isUpdate = dto.Id && dto.Id > 0;
       const solicitudBecaIdForSp = isUpdate ? dto.Id : 0;
 
       request.input('Id', solicitudBecaIdForSp);
-      request.input('EstudianteId', dto.EstudianteId);
+      request.input('EstudianteId', estudianteIdToUse);
       request.input('TipoBecaId', dto.TipoBecaId);
-      request.input('EstadoId', dto.EstadoId || 1); // Valor por defecto
+      request.input('EstadoId', dto.EstadoId || 1);
       request.input('FechaSolicitud', new Date(dto.FechaSolicitud));
       request.input('PeriodoAcademicoId', dto.PeriodoAcademicoId);
       request.input('Observaciones', dto.Observaciones || null);
       request.input('Fecha_resultado', dto.Fecha_resultado ? new Date(dto.Fecha_resultado) : null);
 
+      this.logger.log(`Ejecutando sp_Save_SolicitudBeca con EstudianteId=${estudianteIdToUse}, TipoBecaId=${dto.TipoBecaId}, PeriodoAcademicoId=${dto.PeriodoAcademicoId}...`);
       const result: any = await request.execute('Beca.sp_Save_SolicitudBeca');
-      
+
       const newId = result.recordset?.[0]?.NewId || result.recordset?.[0]?.UpdatedId || solicitudBecaIdForSp;
 
       if (!newId && !isUpdate) {
-        throw new Error('El procedimiento almacenado no devolvió un NewId válido al guardar la solicitud de beca.');
+        const errorMsg = 'El procedimiento almacenado no devolvió un NewId válido al guardar la solicitud de beca.';
+        this.logger.error(errorMsg);
+        throw new Error(errorMsg);
       }
 
+      this.logger.log(`Solicitud de Beca creada/actualizada con ID: ${newId}`);
       return await this.findOne(newId);
-
     } catch (error: any) {
       this.logger.error(`Error al guardar Solicitud de Beca: ${error.message}`, error.stack);
       throw error;
     }
   }
 
-  /**
-   * Actualiza una solicitud de beca existente
-   */
   async update(id: number, dto: CreateSolicitudBecaDto) {
-      dto.Id = id;
-      return this.create(dto);
+    dto.Id = id;
+    return this.create(dto);
   }
 
-  /**
-   * Elimina una solicitud de beca por su ID
-   */
   async remove(id: number): Promise<{ mensaje: string }> {
     try {
       const pool = await this.sqlService.getConnection();
